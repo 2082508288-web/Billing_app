@@ -19,8 +19,8 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
 )
-from PySide6.QtCore import QSizeF, QUrl, QByteArray, QBuffer, QIODevice
-from PySide6.QtGui import QTextDocument, QFont, QPageSize, QImage
+from PySide6.QtCore import QMarginsF, QSizeF, QUrl, QByteArray, QBuffer, QIODevice
+from PySide6.QtGui import QTextDocument, QFont, QPageSize, QPageLayout, QImage
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 
 from widgets import rupees
@@ -215,8 +215,8 @@ def _paid_amount(bill_row):
     """
     Supports paid_amount/amount_paid if supplied by the database.
 
-    Until get_bill() exposes the payment aggregate, the fallback is
-    the bill total so the existing receipt flow keeps working.
+    get_bill() supplies the actual aggregate for saved bills. The fallback
+    supports legacy callers that supply their own receipt data.
     """
     total = _num(_value(bill_row, "total", 0))
 
@@ -1147,13 +1147,7 @@ class ReceiptDialog(QDialog):
     def _configure_printer(printer):
         printer.setResolution(300)
         printer.setPageSize(QPageSize(QPageSize.A4))
-        printer.setPageMargins(
-            4,
-            4,
-            4,
-            4,
-            QPrinter.Millimeter,
-        )
+        printer.setPageMargins(QMarginsF(4, 4, 4, 4), QPageLayout.Millimeter)
 
     def _prepare_document_for_printer(self, printer):
         page_rect = printer.pageRect(QPrinter.Point)

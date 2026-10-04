@@ -136,3 +136,19 @@ that one file to the shop's desktop. Right-click it any time and choose
 "Pin to Start" or "Pin to taskbar" to make it a normal-looking desktop app
 with your icon.
 
+
+## Billing and inventory updates
+
+- Amounts and payments use two decimal places, rounding half up; GST is rounded
+  per bill line before the bill total is calculated.
+- Products with the same name can have separate size/color/barcode variants.
+  Suggestions show variant details when needed. These fields remain optional.
+- A rate entered while billing applies to that sale. Use Inventory to change
+  the catalogue price or product details.
+- Removing a category with only removed products archives the category and keeps
+  historical sales links. Adding the same category name again restores it.
+- Receipt Paid and Balance values reflect payments recorded when the receipt is
+  opened. Reopen a receipt from Sales History after recording a later payment.
+
+Regression commands and historical data limitations are documented in the
+repository's `tests/README.md`.

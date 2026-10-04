@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QDate
 
 from widgets import rupees, make_heading
+from money import money
 
 
 class ReceivePaymentDialog(QDialog):
@@ -316,7 +317,7 @@ class BalancesTab(QWidget):
             self._bill_ids.append(bill_id)
 
             bill_paid = float(self.db.get_bill_paid_amount(bill_id) or 0)
-            bill_balance = max(float(bill["total"]) - bill_paid, 0)
+            bill_balance = max(money(money(bill["total"]) - bill_paid), 0)
 
             self.bill_table.setItem(i, 0, QTableWidgetItem(bill["bill_no"]))
             self.bill_table.setItem(i, 1, QTableWidgetItem(bill["bill_date"]))

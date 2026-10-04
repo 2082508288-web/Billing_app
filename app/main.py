@@ -82,6 +82,7 @@ class MainWindow(QMainWindow):
         self.billing_tab.refresh_catalog()
 
     def _on_bill_saved(self):
+        self.inventory_tab._refresh_items()
         self.sales_tab.refresh()
         self.stats_tab.refresh()
         self.customers_tab._refresh_customer_list()
@@ -100,6 +101,8 @@ class MainWindow(QMainWindow):
             self.balances_tab.refresh()
         elif widget is self.expenses_tab:
             self.expenses_tab.refresh()
+        elif widget is self.inventory_tab:
+            self.inventory_tab._refresh_items()
 
 
 def main():

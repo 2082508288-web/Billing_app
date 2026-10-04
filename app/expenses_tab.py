@@ -309,7 +309,7 @@ class ExpensesTab(QWidget):
             self.expense_table.setCellWidget(row_idx, 6, delete_btn)
 
     def _delete_expense(self, expense_id):
-        if not confirm_delete_password(self):
+        if not confirm_delete_password(self, "delete this expense"):
             return
 
         try:

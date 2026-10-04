@@ -1,4 +1,7 @@
 @echo off
+setlocal
+pushd "%~dp0"
+if errorlevel 1 exit /b 1
 echo ================================================================
 echo  Cloth Shop Billing System - Full Setup
 echo ================================================================
@@ -21,23 +24,23 @@ if errorlevel 1 (
     echo ERROR: Python was not found on PATH.
     echo Install Python 3.10+ from https://python.org and tick
     echo "Add python.exe to PATH" during install, then run this again.
+    popd
     pause
     exit /b 1
 )
 
 echo.
 echo Step 1/2: Installing the desktop app's dependencies...
-pip install -r app\requirements.txt
+python -m pip install -r app\requirements.txt
 if errorlevel 1 goto :pipfail
 
 echo.
 echo Step 2/2: Building ClothShopBilling.exe...
-pip install pyinstaller
+python -m pip install pyinstaller
 if errorlevel 1 goto :pipfail
 
-cd app
-call build_windows.bat
-cd ..
+call app\build_windows.bat
+if errorlevel 1 goto :buildfail
 
 echo.
 echo ================================================================
@@ -56,6 +59,7 @@ echo Tip: use the "Backup Database Now" and "Export Whole Database
 echo (CSV)" buttons on the Application Status tab any time you want a
 echo safety copy of your data.
 echo.
+popd
 pause
 exit /b 0
 
@@ -64,5 +68,12 @@ echo.
 echo Something went wrong installing packages above. Scroll up to see
 echo the error, fix it (often just re-running as Administrator, or
 echo checking your internet connection), then run setup.bat again.
+popd
+pause
+exit /b 1
+
+:buildfail
+echo Executable build failed. Setup did not complete.
+popd
 pause
 exit /b 1

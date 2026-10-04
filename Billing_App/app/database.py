@@ -22,6 +22,8 @@ import shutil
 from datetime import datetime
 from contextlib import contextmanager
 
+from money import money
+
 DB_FILENAME = "cloth_shop.db"
 
 
@@ -193,7 +195,7 @@ class Database:
     # ---------------------------------------------------------- categories
     def get_categories(self):
         with self._conn() as conn:
-            return conn.execute("SELECT * FROM categories ORDER BY name").fetchall()
+            return conn.execute("SELECT * FROM categories WHERE active=1 ORDER BY name").fetchall()
         # ---------------------------------------------------------- payments
 
     def add_payment(
@@ -204,6 +206,7 @@ class Database:
         payment_date=None,
         notes="",
     ):
+        amount = money(amount)
         if amount <= 0:
             raise ValueError("Payment amount must be greater than 0.")
 
@@ -216,6 +219,7 @@ class Database:
             raise ValueError("Invalid payment date. Expected YYYY-MM-DD.")
 
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             bill = conn.execute(
                 """
                 SELECT id, customer_id, total
@@ -238,7 +242,7 @@ class Database:
             ).fetchone()
 
             already_paid = paid_row["paid"]
-            balance = bill["total"] - already_paid
+            balance = money(money(bill["total"]) - money(already_paid))
 
             if amount > balance:
                 raise ValueError(
@@ -280,7 +284,7 @@ class Database:
                 (bill_id,),
             ).fetchone()
 
-            return row["paid"]
+            return money(row["paid"])
 
     def get_bill_balance(self, bill_id):
         with self._conn() as conn:
@@ -300,7 +304,7 @@ class Database:
             if not row:
                 return 0.0
 
-            return max(row["total"] - row["paid"], 0)
+            return max(money(money(row["total"]) - money(row["paid"])), 0)
 
     def get_bill_payment_history(self, bill_id):
         with self._conn() as conn:
@@ -319,10 +323,10 @@ class Database:
             row = conn.execute(
                 """
                 SELECT
-                    COALESCE(SUM(b.total), 0) AS total_billed,
+                    COALESCE(SUM(ROUND(b.total, 2)), 0) AS total_billed,
                     COALESCE(
                         (
-                            SELECT SUM(p.amount)
+                            SELECT SUM(ROUND(p.amount, 2))
                             FROM payments p
                             WHERE p.customer_id=?
                         ),
@@ -334,13 +338,13 @@ class Database:
                 (customer_id, customer_id),
             ).fetchone()
 
-            total_billed = row["total_billed"]
-            total_paid = row["total_paid"]
+            total_billed = money(row["total_billed"])
+            total_paid = money(row["total_paid"])
 
             return {
                 "total_billed": total_billed,
                 "total_paid": total_paid,
-                "balance": max(total_billed - total_paid, 0),
+                "balance": max(money(total_billed - total_paid), 0),
             }
 
     def get_customer_payment_history(self, customer_id):
@@ -368,11 +372,11 @@ class Database:
                     c.name,
                     c.phone,
 
-                    COALESCE(SUM(b.total), 0) AS total_billed,
+                    COALESCE(SUM(ROUND(b.total, 2)), 0) AS total_billed,
 
                     COALESCE(
                         (
-                            SELECT SUM(p.amount)
+                            SELECT SUM(ROUND(p.amount, 2))
                             FROM payments p
                             WHERE p.customer_id = c.id
                         ),
@@ -391,7 +395,9 @@ class Database:
             result = []
             for row in rows:
                 data = dict(row)
-                data["balance"] = max(data["total_billed"] - data["total_paid"], 0)
+                data["total_billed"] = money(data["total_billed"])
+                data["total_paid"] = money(data["total_paid"])
+                data["balance"] = max(money(data["total_billed"] - data["total_paid"]), 0)
                 result.append(data)
 
             return result
@@ -699,6 +705,30 @@ class Database:
 
     def _run_migrations(self):
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            # Table creation is the migration marker. Existing payments tables
+            # already support credit sales, including bills with no payments.
+            legacy_payments = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='payments'"
+            ).fetchone() is None
+            if not self._column_exists(conn, "categories", "active"):
+                conn.execute("ALTER TABLE categories ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+            if not self._column_exists(conn, "bill_items", "stock_deducted"):
+                # NULL means a historical deduction was not recorded.
+                conn.execute("ALTER TABLE bill_items ADD COLUMN stock_deducted INTEGER")
+
+            conn.execute("""CREATE TABLE IF NOT EXISTS bill_sequences (
+                date_key TEXT PRIMARY KEY, last_seq INTEGER NOT NULL
+            )""")
+            # Seed from surviving historical invoices; retain higher sequences
+            # already allocated even after their invoices have been deleted.
+            conn.execute("""INSERT INTO bill_sequences(date_key, last_seq)
+                SELECT substr(bill_no, 5, 8), MAX(CAST(substr(bill_no, 14) AS INTEGER))
+                FROM bills WHERE bill_no GLOB 'INV-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9]*'
+                GROUP BY substr(bill_no, 5, 8)
+                ON CONFLICT(date_key) DO UPDATE SET
+                    last_seq = MAX(bill_sequences.last_seq, excluded.last_seq)
+            """)
             # -------------------------------------------------
             # GST columns
             # -------------------------------------------------
@@ -848,32 +878,33 @@ class Database:
             # completed sale. This prevents every old bill from appearing
             # as an outstanding customer balance after the migration.
             # -------------------------------------------------
-            conn.execute(
-                """
-                INSERT INTO payments(
-                    bill_id,
-                    customer_id,
-                    payment_date,
-                    amount,
-                    payment_mode,
-                    notes
+            if legacy_payments:
+                conn.execute(
+                    """
+                    INSERT INTO payments(
+                        bill_id,
+                        customer_id,
+                        payment_date,
+                        amount,
+                        payment_mode,
+                        notes
+                    )
+                    SELECT
+                        b.id,
+                        b.customer_id,
+                        date(b.bill_date),
+                        b.total,
+                        COALESCE(b.payment_mode, 'Cash'),
+                        'Migrated from historical bill'
+                    FROM bills b
+                    WHERE b.total > 0
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM payments p
+                          WHERE p.bill_id = b.id
+                      )
+                    """
                 )
-                SELECT
-                    b.id,
-                    b.customer_id,
-                    date(b.bill_date),
-                    b.total,
-                    COALESCE(b.payment_mode, 'Cash'),
-                    'Migrated from historical bill'
-                FROM bills b
-                WHERE b.total > 0
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM payments p
-                      WHERE p.bill_id = b.id
-                  )
-                """
-            )
 
             # -------------------------------------------------
             # Indexes
@@ -930,7 +961,11 @@ class Database:
 
     def add_category(self, name: str):
         with self._conn() as conn:
-            conn.execute("INSERT INTO categories(name) VALUES (?)", (name.strip(),))
+            restored = conn.execute(
+                "UPDATE categories SET active=1 WHERE name=? AND active=0", (name.strip(),)
+            )
+            if not restored.rowcount:
+                conn.execute("INSERT INTO categories(name) VALUES (?)", (name.strip(),))
 
     def rename_category(self, cat_id: int, new_name: str):
         with self._conn() as conn:
@@ -940,7 +975,11 @@ class Database:
 
     def delete_category(self, cat_id: int):
         with self._conn() as conn:
-            conn.execute("DELETE FROM categories WHERE id=?", (cat_id,))
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("SELECT 1 FROM items WHERE category_id=? AND active=1", (cat_id,)).fetchone():
+                raise ValueError("This category still has active items. Remove or move them first.")
+            # Archive the category too: inactive items and sale links remain intact.
+            conn.execute("UPDATE categories SET active=0 WHERE id=?", (cat_id,))
 
     # ------------------------------------------------------------ subtypes
     def get_subtypes(self, category_id: int):
@@ -985,7 +1024,11 @@ class Database:
             ),
         ).fetchone()
 
-        return f"{prefix}{row['max_seq'] + 1:03d}"
+        sequence = conn.execute(
+            "SELECT last_seq FROM bill_sequences WHERE date_key=?", (date_key,)
+        ).fetchone()
+        last_seq = max(row["max_seq"], sequence["last_seq"] if sequence else 0)
+        return f"{prefix}{last_seq + 1:03d}"
 
     def delete_subtype(self, subtype_id: int):
         with self._conn() as conn:
@@ -1041,18 +1084,21 @@ class Database:
                 (item_id,),
             ).fetchone()
 
-    def find_item_by_name(self, category_id, subtype_id, name):
-        """Exact-ish match used to recognise a manually typed item that
-        already exists, so we don't create duplicate catalog rows."""
+    def find_item_by_name(self, category_id, subtype_id, name, size="", color="", barcode=""):
+        """Match an active variant without treating missing optional fields as required."""
         with self._conn() as conn:
-            q = "SELECT * FROM items WHERE category_id=? AND name=? "
-            params = [category_id, name]
-            if subtype_id:
-                q += "AND subtype_id=?"
-                params.append(subtype_id)
-            else:
-                q += "AND subtype_id IS NULL"
-            return conn.execute(q, params).fetchone()
+            q = """SELECT * FROM items WHERE active=1 AND category_id=?
+                AND name = ? COLLATE NOCASE AND subtype_id IS ?
+                AND COALESCE(size, '') = ? COLLATE NOCASE
+                AND COALESCE(color, '') = ? COLLATE NOCASE"""
+            params = [category_id, name.strip(), subtype_id, size.strip(), color.strip()]
+            if barcode.strip():
+                q += " AND barcode=?"
+                params.append(barcode.strip())
+            rows = conn.execute(q, params).fetchall()
+            if len(rows) > 1:
+                raise ValueError("Several items match. Select the specific variant or enter its barcode.")
+            return rows[0] if rows else None
 
         # --------------------------------------------------------------- GST
 
@@ -1089,6 +1135,9 @@ class Database:
         self, name, category_id, subtype_id, barcode, size, color, rate, stock_qty=0
     ):
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute("SELECT 1 FROM categories WHERE id=? AND active=1", (category_id,)).fetchone():
+                raise ValueError("Choose an active category. The previous category was removed.")
             cur = conn.execute(
                 """INSERT INTO items(name, category_id, subtype_id, barcode, size,
                                       color, rate, stock_qty)
@@ -1120,6 +1169,9 @@ class Database:
         active=1,
     ):
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not conn.execute("SELECT 1 FROM categories WHERE id=? AND active=1", (category_id,)).fetchone():
+                raise ValueError("Choose an active category. The previous category was removed.")
             conn.execute(
                 """UPDATE items SET name=?, category_id=?, subtype_id=?, barcode=?,
                        size=?, color=?, rate=?, stock_qty=?, active=?
@@ -1324,8 +1376,15 @@ class Database:
         except ValueError:
             raise ValueError("Invalid bill date. Expected YYYY-MM-DD.")
 
+        subtotal = money(subtotal)
+        discount_amount = money(discount_amount)
+        total = money(total)
+        gst_amount = money(gst_amount)
+        if taxable_amount is not None:
+            taxable_amount = money(taxable_amount)
+
         if taxable_amount is None:
-            taxable_amount = max(float(subtotal) - float(discount_amount), 0.0)
+            taxable_amount = max(money(subtotal - discount_amount), 0.0)
 
         if gst_rate < 0:
             raise ValueError("GST rate cannot be negative.")
@@ -1334,17 +1393,16 @@ class Database:
             raise ValueError("GST amount cannot be negative.")
 
         if initial_payment_amount is None:
-            # Backward compatibility: the current Billing tab has no
-            # partial-payment field yet, so its bills are fully paid.
+            # Legacy callers that omit the payment argument represent fully paid sales.
             initial_payment_amount = float(total)
 
-        initial_payment_amount = float(initial_payment_amount)
+        initial_payment_amount = money(initial_payment_amount)
         total = float(total)
 
         if initial_payment_amount < 0:
             raise ValueError("Initial payment cannot be negative.")
 
-        if initial_payment_amount > total + 0.01:
+        if initial_payment_amount > total:
             raise ValueError(
                 f"Initial payment cannot exceed bill total of Rs. {total:.2f}."
             )
@@ -1353,6 +1411,9 @@ class Database:
             conn.execute("BEGIN IMMEDIATE")
 
             bill_no = self._next_bill_no_conn(conn, bill_date)
+            conn.execute("""INSERT INTO bill_sequences(date_key, last_seq) VALUES (?, ?)
+                ON CONFLICT(date_key) DO UPDATE SET last_seq=excluded.last_seq""",
+                (bill_date.replace("-", ""), int(bill_no.rsplit("-", 1)[1])))
 
             cur = conn.execute(
                 """
@@ -1395,13 +1456,20 @@ class Database:
                     raise ValueError(f"Invalid quantity for item: {it['name']}")
 
                 line_gst_rate = float(it.get("gst_rate", gst_rate or 0.0))
-                line_gst_amount = float(it.get("gst_amount", 0.0))
+                line_gst_amount = money(it.get("gst_amount", 0.0))
 
                 if line_gst_rate < 0:
                     raise ValueError("GST rate cannot be negative.")
 
                 if line_gst_amount < 0:
                     raise ValueError("GST amount cannot be negative.")
+
+                stock_deducted = 0
+                if it.get("item_id"):
+                    stock = conn.execute("SELECT stock_qty FROM items WHERE id=?", (it["item_id"],)).fetchone()
+                    if stock is None:
+                        raise ValueError("Item no longer exists. Refresh the catalog and try again.")
+                    stock_deducted = min(quantity, max(stock["stock_qty"], 0))
 
                 conn.execute(
                     """
@@ -1414,9 +1482,10 @@ class Database:
                         rate,
                         subtotal,
                         gst_rate,
-                        gst_amount
+                        gst_amount,
+                        stock_deducted
                     )
-                    VALUES (?,?,?,?,?,?,?,?,?)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         bill_id,
@@ -1424,10 +1493,11 @@ class Database:
                         it["name"],
                         it.get("category", ""),
                         quantity,
-                        it["rate"],
-                        it["subtotal"],
+                        money(it["rate"]),
+                        money(it["subtotal"]),
                         line_gst_rate,
                         line_gst_amount,
+                        stock_deducted,
                     ),
                 )
 
@@ -1478,7 +1548,8 @@ class Database:
     def get_bill(self, bill_id):
         with self._conn() as conn:
             bill = conn.execute(
-                """SELECT bills.*, customers.name AS customer_name, customers.phone AS customer_phone
+                """SELECT bills.*, customers.name AS customer_name, customers.phone AS customer_phone,
+                          (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE bill_id=bills.id) AS paid_amount
                    FROM bills LEFT JOIN customers ON customers.id = bills.customer_id
                    WHERE bills.id=?""",
                 (bill_id,),
@@ -1486,20 +1557,26 @@ class Database:
             items = conn.execute(
                 "SELECT * FROM bill_items WHERE bill_id=?", (bill_id,)
             ).fetchall()
+            if bill is not None:
+                bill = dict(bill)
+                bill["total"] = money(bill["total"])
+                bill["paid_amount"] = money(bill["paid_amount"])
+                bill["balance"] = max(money(bill["total"] - bill["paid_amount"]), 0)
             return bill, items
 
     def delete_bill(self, bill_id):
         """Deletes a bill and its line items, and restores stock quantities
         that were deducted when the bill was made."""
         with self._conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             items = conn.execute(
-                "SELECT item_id, quantity FROM bill_items WHERE bill_id=?", (bill_id,)
+                "SELECT item_id, COALESCE(stock_deducted, quantity) AS stock_deducted FROM bill_items WHERE bill_id=?", (bill_id,)
             ).fetchall()
             for it in items:
                 if it["item_id"]:
                     conn.execute(
                         "UPDATE items SET stock_qty = stock_qty + ? WHERE id=?",
-                        (it["quantity"], it["item_id"]),
+                        (it["stock_deducted"], it["item_id"]),
                     )
             conn.execute("DELETE FROM bills WHERE id=?", (bill_id,))
 
