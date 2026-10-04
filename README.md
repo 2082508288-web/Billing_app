@@ -2,11 +2,11 @@
 
 ## Employee and admin dashboards
 
-The app opens in **Employee** mode: existing catalog items, fixed prices, quantities,
-customer details, full payment and receipts. GST is automatically included in the
+The app opens in **Employee** mode: existing catalog items, fixed prices with
+automatic admin-defined offers, quantities, customer details, full payment and receipts. GST is automatically included in the
 amount due using the existing calculation: a ₹100 price with 5% GST totals ₹105.
 
-**Admin login** unlocks discounts, partial payments, credit, inventory, customers,
+**Admin login** unlocks offers, manual discounts, partial payments, credit, inventory, customers,
 balances, expenses, sales history, statistics, and the backup/export tools available
 in the recommended copy. **Lock admin / Employee mode** clears the unfinished bill
 and returns to employee access. Restarting always begins in Employee mode.
@@ -130,3 +130,49 @@ Decimal aggregation for collections/expenses; historical bill discounts are
 allocated to products with cent reconciliation. Query snapshots keep report
 cards and chart series consistent during writes. SQLite WAL uses FULL write
 synchronization in both desktop copies. No optional database fields are removed.
+
+## Automatic category and brand offers
+
+Log in as admin and open **Offers → New offer**. Enter a name, the number of
+pieces per bundle, and the **total bundle price before GST**. Add the eligible
+category / brand combinations, then save with **Active** checked. You can mix
+several combinations in one deal, or create separate offers for separate groups.
+Use **All brands / styles** for a category-wide offer. Brands are the existing
+Inventory **Brand / Style** values; matching uses their IDs, not item-name text.
+
+For example, with catalog prices of ₹800 each, add Free Soul in Jackets and Free
+Soul in Sweatshirts to a bundle of **3 pieces for ₹2,000**. Any mix of those
+combinations qualifies. At 5% GST, three cost ₹2,100; four cost ₹2,940; six cost
+₹4,200. No example rule is automatically inserted into your database.
+
+Employees get active offers automatically when adding, removing or changing
+quantities. They still cannot edit prices, enter manual discounts, or accept
+partial/credit payments. Admins manage offers and retain their manual discounts.
+The bill displays offer savings, and receipts store the offer name and savings
+as historical snapshots. Changing an offer never reprices an old receipt.
+
+Select a row in Offers to edit it. Uncheck **Active** and save to disable it;
+use the **Disabled** filter to find it later. The list has 200-row pages and an
+indexed name-prefix search. The details panel scrolls on smaller screens.
+
+Pricing rules:
+
+- Every complete qualifying bundle can repeat; leftover pieces retain regular
+  prices. Only bundles that reduce the price apply. With unequal catalog prices,
+  the highest-priced eligible pieces enter bundles first.
+- One active offer is allowed per exact category / brand combination. Conflicts
+  are rejected without overwriting an existing offer. Brand-specific offers take
+  priority over an all-brands offer; offers do not stack on the same pieces.
+- Custom prices entered by admins do not receive automatic bundles. Manual admin
+  discounts on catalog-priced lines apply after the bundle saving and cannot
+  make the line negative.
+- Discounts are allocated in exact cents. Bundle GST is rounded once per offer
+  and tax rate, then allocated to its lines, so splitting a bundle among products
+  does not lose a tax cent. Different GST rates remain separate.
+- The app rechecks offers and employee pricing inside the bill transaction. If
+  an offer changes while a draft is open, use **Refresh offers**, confirm the new
+  total and complete the bill again.
+
+Billing fetches only the category / brand rules relevant to cart items through a
+unique active-scope index. It does not load the entire offer list. Large quantities
+are calculated per cart line rather than expanding into individual pieces.

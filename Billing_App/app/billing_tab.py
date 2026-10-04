@@ -33,6 +33,7 @@ from widgets import rupees, EditableSearchCombo, divider, make_heading
 from receipt import ReceiptDialog
 from money import money, line_amount, tax_amount, sum_money
 from access import AccessSession, RoleDatabase
+from offers import offer_taxes
 
 NO_SUBTYPE = -1  # sentinel stored as itemData for "no brand/style selected"
 
@@ -293,6 +294,14 @@ class BillingTab(QWidget):
 
         self.subtotal_label = QLabel("Subtotal (before discount): Rs. 0.00")
         v.addWidget(self.subtotal_label)
+        self.offer_savings_label = QLabel()
+        self.offer_savings_label.setWordWrap(True)
+        self.offer_savings_label.setTextFormat(Qt.PlainText)
+        v.addWidget(self.offer_savings_label)
+        refresh_offers = QPushButton('Refresh offers')
+        refresh_offers.setProperty('role', 'secondary')
+        refresh_offers.clicked.connect(self._refresh_offers)
+        v.addWidget(refresh_offers)
 
         self.discount_total_row = QWidget()
         dt_row = QHBoxLayout(self.discount_total_row)
@@ -638,10 +647,16 @@ class BillingTab(QWidget):
         self._recalculate_totals()
 
     def _render_cart(self):
+        quotes = self.db.quote_offers(self.cart)
+        for row, quote in zip(self.cart, quotes):
+            row.update(quote)
+            row['discount'] = min(row['discount'], max(money(row['amount']-row['offer_discount']),0))
         self.cart_table.blockSignals(True)
         self.cart_table.setRowCount(len(self.cart))
         for row_idx, row in enumerate(self.cart):
             name_item = QTableWidgetItem(row["name"])
+            if row.get('offer_name'):
+                name_item.setToolTip(f"{row['offer_name']}: save {rupees(row['offer_discount'])} before GST")
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             self.cart_table.setItem(row_idx, 0, name_item)
 
@@ -743,21 +758,26 @@ class BillingTab(QWidget):
         self.cart_table.setColumnHidden(5, not self.discount_visible)
         self.discount_total_row.setVisible(self.discount_visible)
 
+    def _refresh_offers(self):
+        self._render_cart()
+        self._recalculate_totals()
+
     def _subtotal(self):
         """Gross total before any discount and before GST."""
         return sum_money(r["amount"] for r in self.cart)
 
     def _total_discount(self):
-        return sum_money(r["discount"] for r in self.cart)
+        return sum_money(r["discount"] + r.get("offer_discount", 0) for r in self.cart)
 
     def _taxable_amount(self):
         return max(money(self._subtotal() - self._total_discount()), 0.0)
 
+    def _line_taxes(self):
+        return offer_taxes([dict(net=max(money(r['amount']-r['discount']-r.get('offer_discount',0)),0),
+                                gst_rate=r.get('gst_rate',5.0),offer_id=r.get('offer_id')) for r in self.cart])
+
     def _gst_amount(self):
-        return sum_money(
-            tax_amount(max(money(row["amount"] - row["discount"]), 0), row.get("gst_rate", 5.0))
-            for row in self.cart
-        )
+        return sum_money(self._line_taxes())
 
     def _grand_total(self):
         return money(self._taxable_amount() + self._gst_amount())
@@ -774,6 +794,13 @@ class BillingTab(QWidget):
         gst = self._gst_amount()
         total = self._grand_total()
 
+        savings = sum_money(r.get('offer_discount',0) for r in self.cart)
+        names = sorted({r['offer_name'] for r in self.cart if r.get('offer_name')})
+        description = ', '.join(names[:3])
+        if len(names)>3:
+            description += f" (+{len(names)-3} more)"
+        self.offer_savings_label.setText(f"Offers: {description} · Saved {rupees(savings)} before GST" if savings else '')
+        self.offer_savings_label.setVisible(bool(savings))
         self.subtotal_label.setText(f"Subtotal: {rupees(subtotal)}")
         self.discount_total_label.setText(
             f"Total discount given: -{rupees(discount_total)}"
@@ -854,13 +881,16 @@ class BillingTab(QWidget):
 
         # The current catalog uses 5% GST. Each line stores its own GST snapshot.
         bill_items = []
-        for row in self.cart:
-            net_line = max(row["amount"] - row["discount"], 0.0)
+        for row, line_gst_amount in zip(self.cart, self._line_taxes()):
+            net_line = max(row["amount"] - row["discount"] - row.get("offer_discount", 0), 0.0)
             line_gst_rate = float(row.get("gst_rate", 5.0))
             net_line = money(net_line)
-            line_gst_amount = tax_amount(net_line, line_gst_rate)
             bill_items.append(
                 {
+                    "offer_checked": True,
+                    "offer_id_snapshot": row.get('offer_id'),
+                    "offer_name_snapshot": row.get('offer_name', ''),
+                    "offer_discount": row.get('offer_discount', 0),
                     "item_id": row["item_id"],
                     "name": row["name"],
                     "category": row["category"],

@@ -373,6 +373,10 @@ def build_receipt_html(bill_row, bill_items):
         line_sgst = line_gst_amount / 2
 
         description = escape(name)
+        offer_name = _value(item, 'offer_name_snapshot', '')
+        if offer_name:
+            description += (f'<div class="item-category">Offer: {escape(str(offer_name))}'
+                            f' — saved {_money(_value(item, "offer_discount", 0))}</div>')
 
         if category:
             description += (
@@ -1038,6 +1042,10 @@ def build_receipt_text(bill_row, bill_items):
             f"{_money(rate):>12} "
             f"{_money(subtotal):>14}"
         )
+
+        offer_name = _value(item, 'offer_name_snapshot', '')
+        if offer_name:
+            lines.append(f"  Offer: {offer_name} — saved {_money(_value(item, 'offer_discount', 0))}")
 
     lines.extend(
         [

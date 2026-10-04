@@ -4,7 +4,8 @@ import hmac
 import inspect
 from datetime import date
 
-from money import money, line_amount, tax_amount, sum_money
+from money import money, line_amount, sum_money
+from offers import offer_taxes
 
 
 # Store a verifier rather than the password. This is an application access gate;
@@ -45,7 +46,7 @@ class RoleDatabase:
     _EMPLOYEE_METHODS = frozenset({
         "get_categories", "get_subtypes", "get_items", "get_item_by_barcode",
         "get_item_by_id", "find_item_by_name", "get_customer_by_phone",
-        "add_customer",
+        "add_customer", "quote_offers",
     })
 
     def __init__(self, database, session):
@@ -71,9 +72,10 @@ class RoleDatabase:
         if self.session.is_admin:
             return
         lines = []
-        taxes = []
+        net_lines = []
         active_categories = {c["id"] for c in self._database.get_categories()}
-        for row in cart:
+        offers = self._database.quote_offers(cart)
+        for row, offer in zip(cart, offers):
             item = self._database.get_item_by_id(row["item_id"])
             if not item or not item["active"] or item["category_id"] not in active_categories:
                 raise PermissionError("Employees can only bill active catalog items.")
@@ -86,9 +88,13 @@ class RoleDatabase:
                     or float(row["gst_rate"]) != float(item["gst_rate"])
                     or money(row["discount"]) != 0):
                 raise PermissionError("Only admins can change prices, GST or discounts. Refresh the bill if catalog prices changed.")
-            lines.append(amount)
-            taxes.append(tax_amount(amount, item["gst_rate"]))
-        total = sum_money(lines + taxes)
+            if (money(row.get('offer_discount',0)) != offer['offer_discount']
+                    or row.get('offer_id') != offer['offer_id']):
+                raise PermissionError('Offers changed. Click Refresh offers and check the new total.')
+            net = money(amount-offer['offer_discount'])
+            lines.append(net)
+            net_lines.append(dict(net=net,gst_rate=item["gst_rate"],offer_id=offer["offer_id"]))
+        total = sum_money(lines + offer_taxes(net_lines))
         if money(paid_now) != total:
             raise PermissionError("Employees must collect full payment. Partial payment and credit require an admin.")
         if bill_date != date.today().isoformat():
@@ -99,31 +105,15 @@ class RoleDatabase:
             bound = inspect.signature(self._database.save_bill).bind(*args, **kwargs)
             bound.apply_defaults()
             values = bound.arguments
-            items = values["items"]
-            cart = [{"item_id": i.get("item_id"), "qty": i["quantity"],
-                     "rate": i["rate"], "amount": i["subtotal"],
-                     "gst_rate": i.get("gst_rate", 0), "discount": 0} for i in items]
-            paid = values["initial_payment_amount"]
-            if paid is None:
-                paid = values["total"]
-            self.validate_employee_cart(cart, paid, values["bill_date"] or date.today().isoformat())
-            subtotal = sum_money(i["subtotal"] for i in items)
-            gst = sum_money(tax_amount(i["subtotal"], i.get("gst_rate", 0)) for i in items)
-            rates = {float(i.get("gst_rate", 0)) for i in items}
-            bill_rate = next(iter(rates)) if len(rates) == 1 else 0.0
-            if (float(values["gst_rate"]) != bill_rate
-                    or values["payment_mode"] not in ("Cash", "Card", "UPI", "Other")
-                    or money(values["discount_amount"]) != 0 or float(values["discount_percent"]) != 0
-                    or money(values["subtotal"]) != subtotal
-                    or money(values["taxable_amount"] if values["taxable_amount"] is not None else subtotal) != subtotal
-                    or money(values["gst_amount"]) != gst
-                    or money(values["total"]) != sum_money([subtotal, gst])
-                    or any(money(i.get("gst_amount", 0)) != tax_amount(i["subtotal"], i.get("gst_rate", 0)) for i in items)):
-                raise PermissionError("Employees must bill the catalog price with GST and no discount.")
-        result = self._database.save_bill(*args, **kwargs)
-        if not self.session.is_admin:
+            # Enforce canonical pricing in the same transaction that saves the bill.
+            values['employee_pricing'] = True
+            try:
+                result = self._database.save_bill(**values)
+            except ValueError as exc:
+                raise PermissionError(str(exc)) from exc
             self.session.receipt_ids.add(result[0])
-        return result
+            return result
+        return self._database.save_bill(*args, **kwargs)
 
     def get_bill(self, bill_id):
         if not self.session.is_admin and bill_id not in self.session.receipt_ids:

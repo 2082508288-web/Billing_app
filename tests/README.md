@@ -77,3 +77,14 @@ exports, receipt identity on later pages, last-page deletion, historical
 fractional-cent payments, zero-weight historical lines, CSV failure recovery,
 read snapshots during writes, indexed date queries, FULL synchronization,
 fresh reports after navigation, and labelled aggregation of long chart periods.
+
+## Offer checks
+
+`test_offers.py` covers configurable mixed category/brand bundles, repeated bundles
+and remainders, exact discount/GST allocation, mixed tax rates, unequal prices,
+large quantities, employee automatic pricing and management restrictions,
+transactional repricing checks, receipt snapshots, report reconciliation,
+GUI create/edit/disable, prefix search/paging, migration preservation and indexed
+lookup plans. Randomized small carts are compared with a simple expanded-piece
+reference calculation. The one-million-rule benchmark is a separate synthetic
+stress probe, not part of ordinary unittest discovery.

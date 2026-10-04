@@ -24,6 +24,7 @@ from contextlib import contextmanager
 
 from money import money
 from reporting import ReportingQueries, money_cents, MoneySum
+from offers import OfferQueries
 
 DB_FILENAME = "cloth_shop.db"
 
@@ -138,12 +139,13 @@ STARTER_SUBTYPES = {
 DEFAULT_GST_RATE = 5.0
 
 
-class Database(ReportingQueries):
+class Database(ReportingQueries, OfferQueries):
     def __init__(self, path: str = None):
         self.path = path or _default_db_path()
         self._init_schema()
         self._run_migrations()
         self._ensure_report_indexes()
+        self._ensure_offer_schema()
 
     @contextmanager
     def _conn(self):
@@ -1351,6 +1353,7 @@ class Database(ReportingQueries):
         gst_amount=0.0,
         initial_payment_amount=None,
         payment_notes="",
+        employee_pricing=False,
     ):
         """
         Save an entire bill as one atomic transaction.
@@ -1412,6 +1415,9 @@ class Database(ReportingQueries):
 
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
+
+            if employee_pricing or any(i.get('offer_checked') or i.get('offer_id_snapshot') for i in items):
+                self._validate_offer_bill(conn, locals())
 
             bill_no = self._next_bill_no_conn(conn, bill_date)
             conn.execute("""INSERT INTO bill_sequences(date_key, last_seq) VALUES (?, ?)
@@ -1486,9 +1492,12 @@ class Database(ReportingQueries):
                         subtotal,
                         gst_rate,
                         gst_amount,
-                        stock_deducted
+                        stock_deducted,
+                        offer_id_snapshot,
+                        offer_name_snapshot,
+                        offer_discount
                     )
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         bill_id,
@@ -1501,6 +1510,9 @@ class Database(ReportingQueries):
                         line_gst_rate,
                         line_gst_amount,
                         stock_deducted,
+                        it.get('offer_id_snapshot'),
+                        it.get('offer_name_snapshot'),
+                        money(it.get('offer_discount', 0)),
                     ),
                 )
 
