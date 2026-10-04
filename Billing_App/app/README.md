@@ -6,7 +6,11 @@ pants, and ladies wear — with or without barcodes.
 
 ## 1. Setup
 
-Requires Python 3.9+.
+For Windows, use `setup.bat` at the repository root (standard x64 CPython
+3.10–3.14; Python 3.13 recommended). Keep the complete repository, including
+`tools/`. See the root README for detailed setup and log locations.
+
+For a direct source run on other platforms, Python 3.9+ is supported:
 
 ```bash
 cd app
@@ -123,13 +127,11 @@ double-click, with no need to install Python on the shop's computer.
 **Easiest way:** double-click `build_windows.bat` inside the `app` folder.
 It installs everything needed and builds the exe for you.
 
-**Manual way**, from a Command Prompt inside the `app` folder:
+The build uses the shared setup helper, a private `.venv-windows` environment,
+and the compatible versions in `tools/requirements-windows.txt`. To prepare and
+check without building, run the repository's `setup.bat --skip-build`.
 
-```cmd
-pip install -r requirements.txt
-pip install pyinstaller
-pyinstaller --noconsole --onefile --name ClothShopBilling --icon=assets\icon.ico --add-data "assets;assets" main.py
-```
+Detailed failures are saved in `setup.log` inside the selected `app` folder.
 
 Either way, the finished file appears at `dist\ClothShopBilling.exe` — copy
 that one file to the shop's desktop. Right-click it any time and choose
