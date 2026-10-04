@@ -71,3 +71,9 @@ navigation, empty/zero-sales charts and the Balances payment button layout.
 Run it for either copy through the existing `BILLING_APP_DIR` selector. No customer
 production data is used. Reporting screens are also rendered offscreen for visual
 inspection; this complements rather than replaces native Windows validation.
+
+`test_reporting_scale.py` adds multi-page fixtures, stable ordering, complete
+exports, receipt identity on later pages, last-page deletion, historical
+fractional-cent payments, zero-weight historical lines, CSV failure recovery,
+read snapshots during writes, indexed date queries, FULL synchronization,
+fresh reports after navigation, and labelled aggregation of long chart periods.

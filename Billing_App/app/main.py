@@ -91,11 +91,11 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.billing_tab, "New Bill")
         if self.session.is_admin:
             self.status_tab = StatusTab(self.db)
-            self.customers_tab = CustomersTab(self.db)
-            self.balances_tab = BalancesTab(self.db)
-            self.expenses_tab = ExpensesTab(self.db)
-            self.sales_tab = SalesTab(self.db)
-            self.stats_tab = StatsTab(self.db)
+            self.customers_tab = CustomersTab(self.db, autoload=False)
+            self.balances_tab = BalancesTab(self.db, autoload=False)
+            self.expenses_tab = ExpensesTab(self.db, autoload=False)
+            self.sales_tab = SalesTab(self.db, autoload=False)
+            self.stats_tab = StatsTab(self.db, autoload=False)
             self.inventory_tab = InventoryTab(
                 self.db, on_catalog_changed=self._on_catalog_changed
             )
@@ -145,11 +145,9 @@ class MainWindow(QMainWindow):
     def _on_bill_saved(self):
         if not self.session.is_admin:
             return
-        self.inventory_tab._refresh_items()
-        self.sales_tab.refresh()
-        self.stats_tab.refresh()
-        self.customers_tab._refresh_customer_list()
-        self.balances_tab.refresh()
+        # Other screens refresh when opened. Billing must not wait for hidden
+        # ledgers or charts, and each screen reads current committed data on entry.
+        self._on_tab_changed(self.tabs.currentIndex())
 
     def _on_tab_changed(self, index):
         if not self.session.is_admin:

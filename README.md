@@ -111,3 +111,22 @@ Click a bill row in Balances or Customers' Purchase History to view, print or sa
 its receipt. Clicking a payment row in Balances opens that payment's bill receipt.
 The Balances panes can be resized by dragging their dividers. Receive-payment and
 delete buttons keep their own actions. All reporting tools remain admin-only.
+
+### Reporting performance and reliability
+
+Tables display up to 200 rows per page. Use **Previous / Next** to browse the
+remaining matches. Totals and CSV exports always include the entire filtered
+result, including rows on other pages. Exports are written to a temporary file
+and replace the chosen file only after successful completion.
+
+Reports load when their tab is opened and refresh on each visit. Saving a bill
+no longer calculates hidden reports. Changing a chart's product/category or
+ranking option reuses the current report; **Apply / Refresh** reads fresh data.
+The trend uses monthly bars above 180 active sales days, with explicitly monthly
+mean/deviation labels. Daily cards and exported daily rows retain daily values.
+
+Date filters use SQLite date indexes. Report totals use integer cents and exact
+Decimal aggregation for collections/expenses; historical bill discounts are
+allocated to products with cent reconciliation. Query snapshots keep report
+cards and chart series consistent during writes. SQLite WAL uses FULL write
+synchronization in both desktop copies. No optional database fields are removed.

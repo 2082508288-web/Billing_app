@@ -35,16 +35,18 @@ from widgets import rupees, make_heading, confirm_delete_password
 from period_filter import PeriodFilter
 from report_export import export_csv
 from money import sum_money
+from paging import Pager
 
 
 class ExpensesTab(QWidget):
-    def __init__(self, db):
+    def __init__(self, db, autoload=True):
         super().__init__()
         self.db = db
         self._expense_ids = []
 
         self._build_ui()
-        self.refresh()
+        if autoload:
+            self.refresh()
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
@@ -183,6 +185,9 @@ class ExpensesTab(QWidget):
 
         self.expense_table.setEditTriggers(QTableWidget.NoEditTriggers)
         outer.addWidget(self.expense_table, 1)
+        self.pager = Pager()
+        self.pager.changed.connect(self.refresh)
+        outer.addWidget(self.pager)
 
     def _add_expense(self):
         category = self.category_input.currentText().strip()
@@ -226,9 +231,7 @@ class ExpensesTab(QWidget):
 
     def _refresh_category_filter(self):
         current = self.category_filter.currentText()
-        rows = self.db.get_expenses()
-
-        categories = sorted({str(row["category"]) for row in rows if row["category"]})
+        categories = self.db.expense_categories()
 
         self.category_filter.blockSignals(True)
         self.category_filter.clear()
@@ -252,24 +255,22 @@ class ExpensesTab(QWidget):
         except ValueError as exc:
             self.summary_label.setText(str(exc))
             self.expense_table.setRowCount(0)
+            self.pager.set_total(0)
             self._expenses_cache = []
             return False
 
         category = self.category_filter.currentText()
 
-        rows = self.db.get_expenses(
-            date_from=start_date,
-            date_to=end_date,
-        )
-
-        if category and category != "All categories":
-            rows = [r for r in rows if r["category"] == category]
-
+        category = None if category == 'All categories' else category
+        self.pager.filter((start_date,end_date,category))
+        result = self.db.expense_page(start_date,end_date,category,self.pager.size,self.pager.offset)
+        self.pager.set_total(result['count'])
+        rows = result['rows']
         self._expenses_cache = rows
-        total = sum_money(r["amount"] or 0 for r in rows)
+        total = result['total']
 
         self.summary_label.setText(
-            f"Total expenses: {rupees(total)}   •   {len(rows)} expense(s)"
+            f"Total expenses: {rupees(total)}   •   {result['count']} expense(s)"
         )
 
         self.expense_table.setRowCount(len(rows))
@@ -322,7 +323,9 @@ class ExpensesTab(QWidget):
     def _export_csv(self):
         if not self.refresh():
             return
+        category = self.category_filter.currentText()
+        rows = self.db.export_expense_rows(*self.period.bounds(), None if category == 'All categories' else category)
         export_csv(self, "Export Expenses", "expenses_export.csv",
                    ["Date", "Category", "Amount", "Payment", "Description", "Added"],
-                   [[r["expense_date"], r["category"], r["amount"], r["payment_mode"],
-                     r["description"], r["created_at"]] for r in self._expenses_cache])
+                   ([r["expense_date"], r["category"], r["amount"], r["payment_mode"],
+                     r["description"], r["created_at"]] for r in rows))

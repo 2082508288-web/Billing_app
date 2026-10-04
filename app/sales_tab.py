@@ -14,16 +14,17 @@ from widgets import rupees, make_heading, confirm_delete_password
 from receipt import ReceiptDialog
 from period_filter import PeriodFilter
 from report_export import export_csv
-from money import sum_money
+from paging import Pager
 
 
 class SalesTab(QWidget):
-    def __init__(self, db):
+    def __init__(self, db, autoload=True):
         super().__init__()
         self.db = db
         self._bills_cache = []
         self._build_ui()
-        self.refresh()
+        if autoload:
+            self.refresh()
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
@@ -72,6 +73,9 @@ class SalesTab(QWidget):
         self.bills_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.bills_table.doubleClicked.connect(self._view_bill)
         outer.addWidget(self.bills_table, 1)
+        self.pager = Pager()
+        self.pager.changed.connect(self.refresh)
+        outer.addWidget(self.pager)
 
         hint = QLabel("Double-click a bill to view / reprint it.")
         hint.setStyleSheet("color: #6c757d; font-size: 11px;")
@@ -81,17 +85,21 @@ class SalesTab(QWidget):
         try:
             date_from, date_to = self.period.bounds()
         except ValueError as exc:
+            self.pager.set_total(0)
             self._bills_cache = []
             self.bills_table.setRowCount(0)
             self.summary_label.setText(str(exc))
             return False
         search = self.search_input.text().strip() or None
-        bills = self.db.search_bills(date_from=date_from, date_to=date_to, search_text=search)
+        self.pager.filter((date_from,date_to,search))
+        result = self.db.sales_page(date_from,date_to,search, self.pager.size,self.pager.offset)
+        self.pager.set_total(result['summary']['count'])
+        bills = result['rows']
         self._bills_cache = bills
 
         self.bills_table.setRowCount(len(bills))
-        total_revenue = sum_money(b["total"] for b in bills)
-        total_pieces = 0
+        total_revenue = result['summary']['revenue']
+        total_pieces = result['summary']['pieces']
         for row_idx, b in enumerate(bills):
             self.bills_table.setItem(row_idx, 0, QTableWidgetItem(b["bill_no"]))
             self.bills_table.setItem(row_idx, 1, QTableWidgetItem(b["bill_date"][:10]))
@@ -108,11 +116,10 @@ class SalesTab(QWidget):
             remove_btn.clicked.connect(lambda _, bid=bill_id, no=b["bill_no"]: self._delete_bill(bid, no))
             self.bills_table.setCellWidget(row_idx, 7, remove_btn)
 
-            total_pieces += b["piece_count"]
         self.bills_table.resizeRowsToContents()
 
         self.summary_label.setText(
-            f"{len(bills)} bill(s) \u2022 {total_pieces} piece(s) sold \u2022 {rupees(total_revenue)} total"
+            f"{result['summary']['count']} bill(s) \u2022 {total_pieces} piece(s) sold \u2022 {rupees(total_revenue)} total"
         )
 
         return True
@@ -141,8 +148,9 @@ class SalesTab(QWidget):
     def _export_csv(self):
         if not self.refresh():
             return
+        bills = self.db.export_bill_rows(*self.period.bounds(), self.search_input.text().strip())
         export_csv(self, "Export Sales", "sales_export.csv",
                    ["Bill No", "Date", "Customer", "Phone", "Pieces", "Subtotal", "Discount", "Total"],
-                   [[b["bill_no"], b["bill_date"], b["customer_name"] or "Walk-in",
+                   ([b["bill_no"], b["bill_date"], b["customer_name"] or "Walk-in",
                      b["customer_phone"] or "", b["piece_count"], b["subtotal"],
-                     b["discount_amount"], b["total"]] for b in self._bills_cache])
+                     b["discount_amount"], b["total"]] for b in bills))

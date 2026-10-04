@@ -20,8 +20,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QDate
 
 from widgets import rupees, make_heading
-from money import money, sum_money
+from money import sum_money
 from period_filter import PeriodFilter
+from paging import Pager
 from report_export import export_csv
 from receipt import ReceiptDialog
 
@@ -106,7 +107,7 @@ class ReceivePaymentDialog(QDialog):
 
 
 class BalancesTab(QWidget):
-    def __init__(self, db):
+    def __init__(self, db, autoload=True):
         super().__init__()
         self.db = db
         self.selected_customer_id = None
@@ -115,7 +116,8 @@ class BalancesTab(QWidget):
         self._bills_cache = []
         self._payments_cache = []
         self._build_ui()
-        self.refresh()
+        if autoload:
+            self.refresh()
 
     def _build_ui(self):
         outer = QVBoxLayout(self)
@@ -150,6 +152,9 @@ class BalancesTab(QWidget):
         self.customer_table = self._table(['Customer', 'Phone', 'Billed', 'Balance'])
         self.customer_table.itemSelectionChanged.connect(self._on_customer_selected)
         left.addWidget(self.customer_table)
+        self.customer_pager = Pager()
+        self.customer_pager.changed.connect(self.refresh)
+        left.addWidget(self.customer_pager)
         self.splitter.addWidget(customers)
         self.detail_tabs = QTabWidget()
         self.splitter.addWidget(self.detail_tabs)
@@ -170,6 +175,9 @@ class BalancesTab(QWidget):
         self.bill_table.setColumnWidth(6, 140)
         self.bill_table.cellClicked.connect(self._open_bill)
         right.addWidget(self.bill_table, 1)
+        self.bill_pager = Pager()
+        self.bill_pager.changed.connect(lambda: self._load_customer(self.selected_customer_id))
+        right.addWidget(self.bill_pager)
         self.detail_tabs.addTab(ledger, 'Bills')
         history = QGroupBox('Payments received in selected period')
         history.setMinimumHeight(160)
@@ -180,6 +188,9 @@ class BalancesTab(QWidget):
         self.payment_table = self._table(['Date', 'Bill No', 'Amount', 'Mode', 'Notes'], stretch=4)
         self.payment_table.cellClicked.connect(self._open_payment)
         history_layout.addWidget(self.payment_table)
+        self.payment_pager = Pager()
+        self.payment_pager.changed.connect(lambda: self._load_customer(self.selected_customer_id))
+        history_layout.addWidget(self.payment_pager)
         self.detail_tabs.addTab(history, 'Payment history')
 
     @staticmethod
@@ -214,6 +225,7 @@ class BalancesTab(QWidget):
             self._bills_cache = self._payments_cache = []
             self._groups = {}
             self._customer_ids = []
+            self.customer_pager.set_total(0)
             self.customer_table.setRowCount(0)
             self._clear_detail()
             for label in (self.total_billed_label, self.total_paid_label, self.total_outstanding_label):
@@ -221,30 +233,23 @@ class BalancesTab(QWidget):
             self.customer_heading.setText(str(exc))
             return False
         text = self.search_input.text().strip()
-        self._bills_cache = self.db.report_bills(start, end, text)
-        self._payments_cache = self.db.report_payments(start, end, text)
-        self.total_billed_label.setText(rupees(sum_money(b['total'] for b in self._bills_cache)))
-        self.total_paid_label.setText(rupees(sum_money(b['paid'] for b in self._bills_cache)))
-        self.total_outstanding_label.setText(rupees(sum_money(b['balance'] for b in self._bills_cache)))
-        self._groups = {}
-        # Include customers who paid old bills during the period even if no new bill exists.
-        for row in self._bills_cache + self._payments_cache:
-            key = row['customer_id'] or 0
-            self._groups.setdefault(key, dict(name=row['customer_name'] or 'Walk-in',
-                                             phone=row['customer_phone'] or '', bills=[]))
-        for bill in self._bills_cache:
-            self._groups[bill['customer_id'] or 0]['bills'].append(bill)
-        self._customer_ids = sorted(self._groups, key=lambda k: self._groups[k]['name'].casefold())
+        self._groups = self.db.balance_summary(start, end, text)
+        for label, field in ((self.total_billed_label, 'billed'), (self.total_paid_label, 'paid'),
+                             (self.total_outstanding_label, 'balance')):
+            label.setText(rupees(sum_money(g[field] for g in self._groups.values())))
+        ids = sorted(self._groups, key=lambda k: (self._groups[k]['name'].casefold(), k))
+        self.customer_pager.filter((start, end, text))
+        self.customer_pager.set_total(len(ids))
+        self._customer_ids = ids[self.customer_pager.offset:self.customer_pager.offset+self.customer_pager.size]
         self.customer_table.blockSignals(True)
         self.customer_table.setRowCount(len(self._customer_ids))
         for row, key in enumerate(self._customer_ids):
             group = self._groups[key]
             values = [group['name'], group['phone'] or '-',
-                      rupees(sum_money(b['total'] for b in group['bills'])),
-                      rupees(sum_money(b['balance'] for b in group['bills']))]
+                      rupees(group['billed']), rupees(group['balance'])]
             for col, value in enumerate(values):
                 self.customer_table.setItem(row, col, QTableWidgetItem(value))
-        if self.selected_customer_id not in self._groups:
+        if self.selected_customer_id not in self._customer_ids:
             self.selected_customer_id = self._customer_ids[0] if self._customer_ids else None
         if self.selected_customer_id is not None:
             self.customer_table.selectRow(self._customer_ids.index(self.selected_customer_id))
@@ -261,6 +266,8 @@ class BalancesTab(QWidget):
         self._shown_payments = []
         self.bill_table.setRowCount(0)
         self.payment_table.setRowCount(0)
+        self.bill_pager.set_total(0)
+        self.payment_pager.set_total(0)
         self.customer_heading.setText('No matching records')
         self.customer_summary.clear()
 
@@ -275,10 +282,19 @@ class BalancesTab(QWidget):
         if group is None:
             self._clear_detail()
             return
-        bills = group['bills']
+        start, end = self.period.bounds()
+        search = self.search_input.text().strip()
+        for pager in (self.bill_pager, self.payment_pager):
+            pager.filter((key, start, end, search))
+        result = self.db.customer_ledger_page(key, start, end, search,
+                    self.bill_pager.size, self.bill_pager.offset, self.payment_pager.offset)
+        self.bill_pager.set_total(result['bill_count'])
+        self.payment_pager.set_total(result['payment_count'])
+        bills = result['bills']
+        self._bills_cache = bills
         self.customer_heading.setText(group['name'])
-        self.customer_summary.setText(f"Phone: {group['phone'] or '-'} · {len(bills)} bill(s) · "
-                                      f"Outstanding: {rupees(sum_money(b['balance'] for b in bills))}")
+        self.customer_summary.setText(f"Phone: {group['phone'] or '-'} · {result['bill_count']} bill(s) · "
+                                      f"Outstanding: {rupees(group['balance'])}")
         self._bill_ids = [b['id'] for b in bills]
         self.bill_table.setRowCount(len(bills))
         for row, bill in enumerate(bills):
@@ -297,7 +313,7 @@ class BalancesTab(QWidget):
                 label = QLabel('Paid')
                 label.setAlignment(Qt.AlignCenter)
                 self.bill_table.setCellWidget(row, 6, label)
-        self._shown_payments = [p for p in self._payments_cache if (p['customer_id'] or 0) == key]
+        self._shown_payments = result['payments']
         self.payment_table.setRowCount(len(self._shown_payments))
         for row, payment in enumerate(self._shown_payments):
             for col, value in enumerate([payment['payment_date'][:10], payment['bill_no'],
@@ -329,13 +345,15 @@ class BalancesTab(QWidget):
             return
         export_csv(self, 'Export balances', 'balances_export.csv',
                    ['Bill No', 'Bill Date', 'Customer', 'Phone', 'Billed', 'Paid to date', 'Outstanding'],
-                   [[b['bill_no'], b['bill_date'], b['customer_name'] or 'Walk-in', b['customer_phone'] or '',
-                     b['total'], b['paid'], b['balance']] for b in self._bills_cache])
+                   ([b['bill_no'], b['bill_date'], b['customer_name'] or 'Walk-in', b['customer_phone'] or '',
+                     b['total'], b['paid'], b['balance']] for b in self.db.export_bill_rows(*self.period.bounds(), self.search_input.text().strip())))
 
     def _export_payments(self):
         if not self.refresh():
             return
+        if self.selected_customer_id is None:
+            return
         export_csv(self, 'Export customer payments', 'payments_export.csv',
                    ['Date', 'Bill No', 'Amount', 'Mode', 'Notes'],
-                   [[p['payment_date'], p['bill_no'], p['amount'], p['payment_mode'], p['notes'] or '']
-                    for p in self._shown_payments])
+                   ([p['payment_date'], p['bill_no'], p['amount'], p['payment_mode'], p['notes'] or '']
+                    for p in self.db.export_payment_rows(*self.period.bounds(), self.search_input.text().strip(), customer=self.selected_customer_id)))

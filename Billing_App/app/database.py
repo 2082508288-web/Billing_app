@@ -23,7 +23,7 @@ from datetime import datetime
 from contextlib import contextmanager
 
 from money import money
-from reporting import ReportingQueries
+from reporting import ReportingQueries, money_cents, MoneySum
 
 DB_FILENAME = "cloth_shop.db"
 
@@ -143,27 +143,18 @@ class Database(ReportingQueries):
         self.path = path or _default_db_path()
         self._init_schema()
         self._run_migrations()
+        self._ensure_report_indexes()
 
     @contextmanager
     def _conn(self):
         conn = sqlite3.connect(self.path, timeout=10)
         conn.row_factory = sqlite3.Row
+        conn.create_function("money_cents", 1, money_cents, deterministic=True)
+        conn.create_aggregate("sum_money_cents", 1, MoneySum)
 
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
-        # Performance fix: synchronous=FULL forces an fsync on every single
-        # write transaction (every bill, every expense, every stock
-        # update), which is the main reason things can start to feel
-        # laggy as the database grows -- not the row count itself (SQLite
-        # is fine into the millions of rows with the indexes already in
-        # this schema), but the disk-sync cost paid on every write.
-        # synchronous=NORMAL is the combination SQLite's own docs
-        # recommend when journal_mode=WAL: still safe against an
-        # application crash (WAL protects that), and only a power-loss
-        # in the split second of a checkpoint could ever be an issue --
-        # a reasonable trade for a shop till. This does not touch the
-        # schema or any stored data.
-        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA synchronous = FULL")
         conn.execute("PRAGMA busy_timeout = 10000")
 
         try:
@@ -174,6 +165,17 @@ class Database(ReportingQueries):
             raise
         finally:
             conn.close()
+
+    def _ensure_report_indexes(self):
+        # date(...) indexes preserve existing timestamp/date semantics.
+        with self._conn() as conn:
+            for statement in (
+                "CREATE INDEX IF NOT EXISTS idx_bills_day ON bills(date(bill_date))",
+                "CREATE INDEX IF NOT EXISTS idx_payments_day ON payments(date(payment_date))",
+                "CREATE INDEX IF NOT EXISTS idx_expenses_day ON expenses(date(expense_date))",
+                "CREATE INDEX IF NOT EXISTS idx_bills_customer_date ON bills(customer_id,bill_date DESC,id DESC)",
+            ):
+                conn.execute(statement)
 
     def _init_schema(self):
         with self._conn() as conn:
