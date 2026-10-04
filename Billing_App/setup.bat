@@ -10,8 +10,7 @@ echo.
 echo It does NOT touch your shop's existing database. The database
 echo always lives at:
 echo    %%USERPROFILE%%\.cloth_shop_billing\cloth_shop.db
-echo and both the desktop app and its built-in "Start Server" feature
-echo already read and write that exact same file -- this script does
+echo The desktop app reads and writes that file. This script does
 echo not create, move, or reset it.
 echo.
 pause
@@ -27,20 +26,12 @@ if errorlevel 1 (
 )
 
 echo.
-echo Step 1/3: Installing the desktop app's dependencies...
-echo   (PySide6, matplotlib, plus fastapi/uvicorn/qrcode for the
-echo    built-in Start Server feature -- these used to be missing,
-echo    which is why Start Server failed after a fresh setup.)
+echo Step 1/2: Installing the desktop app's dependencies...
 pip install -r app\requirements.txt
 if errorlevel 1 goto :pipfail
 
 echo.
-echo Step 2/3: Installing the local web server's dependencies...
-pip install -r clothshop_billing_server\backend\requirements.txt
-if errorlevel 1 goto :pipfail
-
-echo.
-echo Step 3/3: Building ClothShopBilling.exe...
+echo Step 2/2: Building ClothShopBilling.exe...
 pip install pyinstaller
 if errorlevel 1 goto :pipfail
 

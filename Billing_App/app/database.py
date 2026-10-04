@@ -1747,7 +1747,7 @@ class Database:
         page). Returns the full path to the backup file.
 
         dest_folder defaults to ~/.cloth_shop_billing/backups, next to the
-        live database, matching the layout the server side already uses.
+        live database.
         """
         if dest_folder is None:
             dest_folder = os.path.join(

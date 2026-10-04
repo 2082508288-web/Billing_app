@@ -22,7 +22,6 @@ from billing_tab import BillingTab
 from inventory_tab import InventoryTab
 from customers_tab import CustomersTab
 from sales_tab import SalesTab
-from status_tab import StatusTab
 from stats_tab import StatsTab
 from balances_tab import BalancesTab
 from expenses_tab import ExpensesTab
@@ -57,7 +56,6 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
 
-        self.status_tab = StatusTab()
         self.customers_tab = CustomersTab(self.db)
         self.balances_tab = BalancesTab(self.db)
         self.expenses_tab = ExpensesTab(self.db)
@@ -77,16 +75,11 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.expenses_tab, "Expenses")
         self.tabs.addTab(self.sales_tab, "Sales History")
         self.tabs.addTab(self.stats_tab, "Statistics")
-        self.tabs.addTab(self.status_tab, "Application Status")
 
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
     def _on_catalog_changed(self):
         self.billing_tab.refresh_catalog()
-
-    def closeEvent(self, event):
-        self.status_tab.shutdown_server()
-        event.accept()
 
     def _on_bill_saved(self):
         self.sales_tab.refresh()
