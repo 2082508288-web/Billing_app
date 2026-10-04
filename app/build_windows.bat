@@ -1,12 +1,14 @@
 @echo off
+cd /d "%~dp0"
 echo ============================================
 echo  Cloth Shop Billing System - Build .exe
 echo ============================================
 echo.
 
 echo Step 1/3: Installing required packages...
-pip install -r requirements.txt
-pip install pyinstaller
+python -m pip install -r requirements.txt
+if errorlevel 1 exit /b 1
+python -m pip install pyinstaller
 if errorlevel 1 (
     echo.
     echo Something went wrong installing packages. Make sure Python is
@@ -17,7 +19,7 @@ if errorlevel 1 (
 
 echo.
 echo Step 2/3: Building ClothShopBilling.exe (this can take a minute)...
-pyinstaller --noconsole --onefile --name ClothShopBilling --icon=assets\icon.ico --add-data "assets;assets" main.py
+python -m PyInstaller --noconsole --onefile --name ClothShopBilling --icon=assets\icon.ico --add-data "assets;assets" main.py
 if errorlevel 1 (
     echo.
     echo The build failed. Scroll up to see the error message.

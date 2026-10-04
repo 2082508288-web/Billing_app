@@ -1,138 +1,70 @@
-# Cloth Shop Billing System
+# Desktop app guide
 
-A desktop billing application built with **PySide6** and **SQLite**, made for
-a clothing shop that sells shirts, t-shirts, jeans (multiple brands), cotton
-pants, and ladies wear — with or without barcodes.
+## Setup and launch
 
-## 1. Setup
+From the repository root, with Python 3.9+:
 
-Requires Python 3.9+.
-
-```bash
-cd app
-pip install -r requirements.txt
-python main.py
+```sh
+python -m pip install -r app/requirements.txt
+python app/main.py
 ```
 
-The database file is created automatically on first run at:
-- Windows: `C:\Users\<you>\.cloth_shop_billing\cloth_shop.db`
-- Mac/Linux: `~/.cloth_shop_billing/cloth_shop.db`
+From this folder, use `python -m pip install -r requirements.txt` and `python main.py`.
 
-Back up that one file to back up your entire shop's data.
-
-## 2. What's inside
+## Shop workflow
 
 | Tab | Purpose |
-|---|---|
-| **New Bill** | Scan a barcode, or enter items manually with autocomplete. Customer lookup by phone. Discount panel is hidden until you click "+ Discount". Prints / saves a PDF receipt. |
-| **Inventory** | Manage categories → brands/styles → items. Add, rename, delete, set rates. Nothing is hardcoded — everything here is editable data. |
-| **Customers** | Search any customer, see full purchase history, and log what they said they want next time ("Wants Next"). |
-| **Sales History** | Every bill ever made, filterable by date range, searchable, exportable to CSV. |
-| **Statistics** | Revenue, pieces sold, best sellers (by quantity or revenue), daily sales trend with **mean and standard deviation**, category breakdown, top customers, and open customer requests. |
+| --- | --- |
+| New Bill | Scan or enter products, apply discounts, record the amount paid, then save and print an invoice. |
+| Inventory | Maintain categories, brands, prices, and stock. |
+| Customers | Customer details, purchase history, receipt reprints, and requests for future purchases. |
+| Payments & Balances | All bills and payments, including walk-in sales. Select an account to view its ledger or receive an outstanding payment. |
+| Expenses | Business expenses with date and category filters. |
+| Sales History | Search bills, filter by day or month range, reprint receipts, and export CSV. |
+| Statistics | Revenue, collections, expenses, credit, daily bars, monthly sales, and best sellers. |
+| Data & Backups | Local database location, database backup, and export of all tables as CSV. |
 
-## 3. How "no hardcoding" works
+A saved bill appears in Sales History and Payments & Balances before the receipt opens. Saving a backdated bill expands the Sales History date range and clears its search so the new entry is visible. Statistics switches to All time when the saved bill is outside the current period. Later payments, bill removals, and other committed changes refresh the reports automatically.
 
-The category list (Shirts, T-Shirts, Jeans, Cotton Pants, Ladies) and the
-starter brands (LP / Mufti / US Polo for Jeans, Round Neck / Collar for
-T-Shirts) are inserted into the database **once**, the first time the app
-runs — as a convenience starting point, not as code. From that point on:
+Paid now defaults to the bill total. Enter a smaller amount for partial payment or zero for credit. Unpaid balances remain unpaid when the app restarts. No payment is recorded merely because a receipt or QR is generated.
 
-- You can rename or delete any category or brand from the **Inventory** tab.
-- Add a new category any time (e.g. "Sarees", "Kids Wear") — no code changes.
-- Every item you type manually while billing (that isn't already in the
-  catalog) is **automatically saved** to the catalog, so it's suggested by
-  autocomplete the next time you type a similar name. This is how the
-  "recommend as you type" behaviour learns your actual stock over time.
+Sales History opens with All time selected. Manual date changes select Custom; use Search (or Enter in the search box) to apply them. Day/month shortcuts apply immediately.
 
-## 4. Barcode-less items — the recommended workflow
+The daily chart starts with the last seven days. It includes days with zero sales, and averages use calendar days. Longer periods scroll horizontally; periods longer than 90 days show the latest 90 daily bars, with a caption explaining that limit. The KPI cards use the entire selected period. The monthly chart always shows the complete history.
 
-1. Try scanning the barcode first.
-2. If nothing is found, the app tells you and shifts focus to manual entry.
-3. Pick the **Category** (e.g. Jeans), then **Brand/Style** (e.g. Mufti).
-4. Start typing the item name — existing items in that category/brand show
-   up as suggestions. Pick one to auto-fill its rate, size, and color, or
-   just type a new name and fill in the rate yourself.
-5. Optionally assign it a barcode right there so it can be scanned next time.
-6. Click **+ Add to Bill**.
+## Receipt and payment QR
 
-## 5. Discount (per item)
+QR codes are generated locally using `qrcode[pil]`, which is included in the requirements and Windows build. They appear in the receipt preview and exported PDF.
 
-Each line in the bill has its own **Discount** field, but it's hidden by
-default — the cart table only shows Item / Category / Qty / Rate / Amount.
-Click the small **"▸ Discount"** button above the cart to reveal the
-Discount column and type a rupee discount straight into any line; click it
-again ("▾ Discount") to hide it. The totals at the bottom always show the
-Subtotal (before discount) and the final Total to Pay; the "Total discount
-given" line only appears while the Discount column is open, so a customer
-glancing at the screen doesn't see it by default.
+Edit the shop identity, bank details, and `UPI_ID` in `receipt.py` to match the shop. The existing configured UPI address is retained; confirm it belongs to the receiving account before collecting live payments. Partially paid receipts encode only the outstanding amount. Paid receipts are labelled PAID and retain a merchant QR without a requested amount.
 
-## 6. Deleting a bill or a customer
+Use Print A4 or Save as PDF from the receipt window. If opening a receipt fails after a sale is saved, reopen that bill from Sales History; the cart has already been cleared to prevent accidental duplicate submission.
 
-Both **Sales History** and **Customers** have a **Remove** button (per bill,
-and for a whole customer). Removing anything asks for a confirmation and
-then a password — **1852** — so it can't happen by accident or by someone
-just clicking around. Removing a bill also puts its stock quantities back.
-Removing a customer keeps their past bills in your sales records (as
-walk-in sales) but deletes their profile and wishlist. To change the
-password, edit `DELETE_PASSWORD` near the top of `widgets.py`.
+## Local data and backup
 
-## 7. Customizing the receipt
+Data remains at the existing location:
 
-Open `receipt.py` and edit `SHOP_NAME` and `SHOP_TAGLINE` at the top of the
-file to match your shop's name.
+- Windows: `%USERPROFILE%\.cloth_shop_billing\cloth_shop.db`
+- macOS/Linux: `~/.cloth_shop_billing/cloth_shop.db`
 
-## 8. Project structure
+Use **Data & Backups → Back Up Database** to create a consistent snapshot while the app is running. Backups are saved in a `backups` directory alongside the database. Copy these backups to a separate device for safekeeping. CSV export is useful for reports; the database backup preserves the complete relational data.
 
-```
-app/
-  main.py          - application entry point, wires all tabs together
-  database.py       - all SQLite schema + queries (the only place SQL lives)
-  theme.py           - one stylesheet used across the whole app
-  widgets.py          - small reusable UI helpers (currency formatting, etc.)
-  billing_tab.py       - New Bill screen
-  inventory_tab.py      - Category / brand / item management
-  customers_tab.py       - Customer search, history, wishlist
-  sales_tab.py             - Sales history + CSV export
-  stats_tab.py               - Charts and KPIs
-  receipt.py                  - Printable / PDF receipt dialog
-  assets/icon.ico               - app icon (Windows .exe icon, title bar, taskbar)
-  assets/icon_*.png               - the same icon as plain PNGs
-  generate_icon.py                 - regenerates the icon if you want to change it
-  build_windows.bat                 - one-click .exe build (see below)
-  requirements.txt
-```
+The consolidation and server removal do not move or reset shop records. Databases from before the payment ledger are migrated once. Existing payment records are preserved; erroneous payment rows that an earlier version may already have created cannot be identified reliably and require reconciliation against shop records.
 
-## 9. The app icon
+## Windows executable
 
-`assets/icon.ico` is used three places: the Windows `.exe` file itself, the
-window's title bar, and the taskbar. If you ever want a different design,
-edit the colors/shapes at the top of `generate_icon.py` and re-run:
+Run `build_windows.bat` on Windows. It changes to this folder, installs desktop dependencies, and builds `dist/ClothShopBilling.exe` using PyInstaller. No Python installation is needed on the computer running the finished executable.
 
-```bash
-python generate_icon.py
-```
+## Source layout
 
-That regenerates `assets/icon.ico` and the PNG copies from scratch — nothing
-else in the app needs to change.
+- `main.py`: entry point, tab wiring, and refresh scheduling
+- `database.py`: SQLite schema, migrations, transactions, reporting, backup/export
+- `billing_tab.py`, `sales_tab.py`, `balances_tab.py`: bills and payments
+- `customers_tab.py`, `inventory_tab.py`, `expenses_tab.py`: shop records
+- `stats_tab.py`: charts and summary cards
+- `receipt.py`: invoice layout, QR, printing, and PDF
+- `status_tab.py`: local data and backup page
+- `theme.py`, `widgets.py`: shared visual styling and controls
+- `assets/`: application icons
 
-## 10. Packaging as a standalone .exe (Windows)
-
-This turns the whole app into a single `ClothShopBilling.exe` your staff can
-double-click, with no need to install Python on the shop's computer.
-
-**Easiest way:** double-click `build_windows.bat` inside the `app` folder.
-It installs everything needed and builds the exe for you.
-
-**Manual way**, from a Command Prompt inside the `app` folder:
-
-```cmd
-pip install -r requirements.txt
-pip install pyinstaller
-pyinstaller --noconsole --onefile --name ClothShopBilling --icon=assets\icon.ico --add-data "assets;assets" main.py
-```
-
-Either way, the finished file appears at `dist\ClothShopBilling.exe` — copy
-that one file to the shop's desktop. Right-click it any time and choose
-"Pin to Start" or "Pin to taskbar" to make it a normal-looking desktop app
-with your icon.
-
+Categories and brands are editable data. Manual products are saved to the catalog for reuse. Removing a bill/customer requires confirmation and the existing password defined by `DELETE_PASSWORD` in `widgets.py`.
