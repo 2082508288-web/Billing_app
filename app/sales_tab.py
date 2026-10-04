@@ -11,7 +11,7 @@ from datetime import date, timedelta
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QLineEdit,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QDateEdit,
-    QComboBox, QFileDialog, QMessageBox, QDialog
+    QComboBox, QSpinBox, QFileDialog, QMessageBox, QDialog
 )
 from PySide6.QtCore import Qt, QDate
 
@@ -25,6 +25,8 @@ class SalesTab(QWidget):
         self.db = db
         self._bills_cache = []
         self._build_ui()
+        self.date_from.dateChanged.connect(self._use_custom_range)
+        self.date_to.dateChanged.connect(self._use_custom_range)
         self.refresh()
 
     def _build_ui(self):
@@ -34,18 +36,20 @@ class SalesTab(QWidget):
         outer.addWidget(make_heading("Sales History", "Every bill, what sold, and when"))
 
         filter_box = QGroupBox("Filters")
-        filter_row = QHBoxLayout(filter_box)
+        filter_layout = QVBoxLayout(filter_box)
+        filter_row = QHBoxLayout()
+        filter_layout.addLayout(filter_row)
 
         filter_row.addWidget(QLabel("From:"))
         self.date_from = QDateEdit(calendarPopup=True)
         self.date_from.setDisplayFormat("dd-MM-yyyy")
-        self.date_from.setDate(QDate.currentDate().addMonths(-1))
+        self._set_date(self.date_from, QDate.currentDate().addMonths(-1))
         filter_row.addWidget(self.date_from)
 
         filter_row.addWidget(QLabel("To:"))
         self.date_to = QDateEdit(calendarPopup=True)
         self.date_to.setDisplayFormat("dd-MM-yyyy")
-        self.date_to.setDate(QDate.currentDate())
+        self._set_date(self.date_to, QDate.currentDate())
         filter_row.addWidget(self.date_to)
 
         self.quick_range_combo = QComboBox()
@@ -53,6 +57,54 @@ class SalesTab(QWidget):
         self.quick_range_combo.currentTextChanged.connect(self._apply_quick_range)
         filter_row.addWidget(self.quick_range_combo)
 
+        filter_row.addStretch()
+        filter_row = QHBoxLayout()
+        filter_layout.addLayout(filter_row)
+
+        # Month-range picker: lets the user pick "from this month ...
+        # to this month" directly (e.g. Jan 2026 to Jun 2026) instead of
+        # having to pick exact days, and feeds the same date_from/date_to
+        # used everywhere below -- including "Export CSV", so exporting
+        # a specific range of months is just: pick the two months here,
+        # click Apply, then Export CSV.
+        filter_row.addWidget(QLabel("  Month range:"))
+        month_names = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ]
+        today = QDate.currentDate()
+
+        self.from_month_combo = QComboBox()
+        self.from_month_combo.addItems(month_names)
+        self.from_month_combo.setCurrentIndex(today.month() - 1)
+        filter_row.addWidget(self.from_month_combo)
+
+        self.from_year_spin = QSpinBox()
+        self.from_year_spin.setRange(2000, today.year() + 1)
+        self.from_year_spin.setValue(today.year())
+        filter_row.addWidget(self.from_year_spin)
+
+        filter_row.addWidget(QLabel("to"))
+
+        self.to_month_combo = QComboBox()
+        self.to_month_combo.addItems(month_names)
+        self.to_month_combo.setCurrentIndex(today.month() - 1)
+        filter_row.addWidget(self.to_month_combo)
+
+        self.to_year_spin = QSpinBox()
+        self.to_year_spin.setRange(2000, today.year() + 1)
+        self.to_year_spin.setValue(today.year())
+        filter_row.addWidget(self.to_year_spin)
+
+        apply_month_range_btn = QPushButton("Apply")
+        apply_month_range_btn.setProperty("role", "secondary")
+        apply_month_range_btn.setToolTip("Set the date filters above to this month range")
+        apply_month_range_btn.clicked.connect(self._apply_month_range)
+        filter_row.addWidget(apply_month_range_btn)
+
+        filter_row.addStretch()
+        filter_row = QHBoxLayout()
+        filter_layout.addLayout(filter_row)
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search bill no / customer / phone...")
         filter_row.addWidget(self.search_input, 1)
@@ -66,6 +118,11 @@ class SalesTab(QWidget):
         export_btn.clicked.connect(self._export_csv)
         filter_row.addWidget(export_btn)
 
+        self.search_input.returnPressed.connect(self.refresh)
+        self.quick_range_combo.blockSignals(True)
+        self.quick_range_combo.setCurrentText("All time")
+        self.quick_range_combo.blockSignals(False)
+        self._set_date(self.date_from, QDate(2000, 1, 1))
         outer.addWidget(filter_box)
 
         self.summary_label = QLabel("")
@@ -77,6 +134,8 @@ class SalesTab(QWidget):
         self.bills_table.setHorizontalHeaderLabels(
             ["Bill No", "Date", "Customer", "Pieces", "Subtotal", "Discount", "Total", ""]
         )
+        for column in (0, 1, 3, 4, 5, 6):
+            self.bills_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
         self.bills_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.bills_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Fixed)
         self.bills_table.setColumnWidth(7, 90)
@@ -89,30 +148,88 @@ class SalesTab(QWidget):
         hint.setStyleSheet("color: #6c757d; font-size: 11px;")
         outer.addWidget(hint)
 
+    @staticmethod
+    def _set_date(widget, value):
+        widget.blockSignals(True)
+        widget.setDate(value)
+        widget.blockSignals(False)
+
+    def _use_custom_range(self):
+        self.quick_range_combo.blockSignals(True)
+        self.quick_range_combo.setCurrentText("Custom")
+        self.quick_range_combo.blockSignals(False)
+
+    def _apply_month_range(self):
+        from_year = self.from_year_spin.value()
+        from_month = self.from_month_combo.currentIndex() + 1
+        to_year = self.to_year_spin.value()
+        to_month = self.to_month_combo.currentIndex() + 1
+
+        start = QDate(from_year, from_month, 1)
+        end = QDate(to_year, to_month, 1).addMonths(1).addDays(-1)  # last day of that month
+
+        if start > end:
+            QMessageBox.warning(
+                self, "Invalid range", "The 'from' month must not be after the 'to' month."
+            )
+            return
+
+        self.quick_range_combo.blockSignals(True)
+        self.quick_range_combo.setCurrentText("Custom")
+        self.quick_range_combo.blockSignals(False)
+        self._set_date(self.date_from, start)
+        self._set_date(self.date_to, end)
+        self.refresh()
+
     def _apply_quick_range(self, label):
         today = QDate.currentDate()
         if label == "Today":
-            self.date_from.setDate(today)
-            self.date_to.setDate(today)
+            self._set_date(self.date_from, today)
+            self._set_date(self.date_to, today)
         elif label == "Last 7 days":
-            self.date_from.setDate(today.addDays(-6))
-            self.date_to.setDate(today)
+            self._set_date(self.date_from, today.addDays(-6))
+            self._set_date(self.date_to, today)
         elif label == "Last 30 days":
-            self.date_from.setDate(today.addDays(-29))
-            self.date_to.setDate(today)
+            self._set_date(self.date_from, today.addDays(-29))
+            self._set_date(self.date_to, today)
         elif label == "This month":
-            self.date_from.setDate(QDate(today.year(), today.month(), 1))
-            self.date_to.setDate(today)
+            self._set_date(self.date_from, QDate(today.year(), today.month(), 1))
+            self._set_date(self.date_to, today)
         elif label == "All time":
-            self.date_from.setDate(QDate(2000, 1, 1))
-            self.date_to.setDate(today)
+            self._set_date(self.date_from, QDate(2000, 1, 1))
+            self._set_date(self.date_to, today)
         else:
             return
         self.refresh()
 
+    def show_saved_bill(self, bill_date):
+        """Ensure the just-saved bill is visible, including backdated sales."""
+        saved_date = QDate.fromString(bill_date[:10], "yyyy-MM-dd")
+        self.search_input.clear()
+        self.quick_range_combo.blockSignals(True)
+        self.quick_range_combo.setCurrentText("Custom")
+        self.quick_range_combo.blockSignals(False)
+        self._set_date(self.date_from, min(self.date_from.date(), saved_date))
+        self._set_date(self.date_to, max(self.date_to.date(), saved_date))
+
     def refresh(self):
+        # Rolling presets follow the current day even when the app stays open.
+        label = self.quick_range_combo.currentText()
+        today = QDate.currentDate()
+        starts = {"Today": today, "Last 7 days": today.addDays(-6),
+                  "Last 30 days": today.addDays(-29),
+                  "This month": QDate(today.year(), today.month(), 1),
+                  "All time": QDate(2000, 1, 1)}
+        if label in starts:
+            self._set_date(self.date_from, starts[label])
+            self._set_date(self.date_to, today)
         date_from = self.date_from.date().toString("yyyy-MM-dd")
         date_to = self.date_to.date().toString("yyyy-MM-dd")
+        if date_from > date_to:
+            self._bills_cache = []
+            self.bills_table.setRowCount(0)
+            self.summary_label.setText("Choose a start date on or before the end date.")
+            return
         search = self.search_input.text().strip() or None
         bills = self.db.search_bills(date_from=date_from, date_to=date_to, search_text=search)
         self._bills_cache = bills

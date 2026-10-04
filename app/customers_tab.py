@@ -28,6 +28,7 @@ from widgets import (
     make_heading,
     confirm_delete_password,
 )
+from receipt import ReceiptDialog
 
 
 class CustomersTab(QWidget):
@@ -37,6 +38,7 @@ class CustomersTab(QWidget):
         self.db = db
         self.selected_customer_id = None
         self.create_mode = False
+        self._history_cache = []
 
         self._build_ui()
         self._refresh_customer_list()
@@ -224,7 +226,7 @@ class CustomersTab(QWidget):
 
         self.history_table = QTableWidget(
             0,
-            5,
+            6,
         )
 
         self.history_table.verticalHeader().setDefaultSectionSize(40)
@@ -235,6 +237,7 @@ class CustomersTab(QWidget):
                 "Date",
                 "Items",
                 "Total",
+                "",
                 "",
             ]
         )
@@ -248,15 +251,36 @@ class CustomersTab(QWidget):
             4,
             QHeaderView.Fixed,
         )
+        self.history_table.horizontalHeader().setSectionResizeMode(
+            5,
+            QHeaderView.Fixed,
+        )
 
         self.history_table.setColumnWidth(
             4,
+            80,
+        )
+        self.history_table.setColumnWidth(
+            5,
             90,
         )
 
         self.history_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.history_table.setSelectionBehavior(QTableWidget.SelectRows)
+
+        # Bug fix: the only way to open a bill from Purchase History was
+        # to double-click the row, which most people never discover --
+        # they single-click (which just selects the row) and conclude
+        # nothing happens. There's now a dedicated "View" button per
+        # row, in addition to keeping double-click for people who do
+        # know the shortcut.
+        self.history_table.doubleClicked.connect(self._view_bill)
 
         history_v.addWidget(self.history_table)
+
+        history_hint = QLabel("Click \u201cView\u201d (or double-click a row) to open / reprint a bill.")
+        history_hint.setStyleSheet("color: #6c757d; font-size: 11px;")
+        history_v.addWidget(history_hint)
 
         right_v.addWidget(
             history_box,
@@ -330,12 +354,23 @@ class CustomersTab(QWidget):
     # CUSTOMER LIST
     # ============================================================
 
+    def refresh(self):
+        self._refresh_customer_list()
+        if self.selected_customer_id and not self.create_mode:
+            if self.db.get_customer_by_id(self.selected_customer_id):
+                self._load_customer(self.selected_customer_id)
+            else:
+                self.selected_customer_id = None
+                self._start_new_customer()
+
     def _refresh_customer_list(self):
 
         text = self.search_input.text().strip()
 
         customers = self.db.search_customers(text)
 
+        self.customer_table.blockSignals(True)
+        self.customer_table.clearSelection()
         self.customer_table.setRowCount(len(customers))
 
         self._customer_ids = []
@@ -362,6 +397,10 @@ class CustomersTab(QWidget):
                 2,
                 QTableWidgetItem(rupees(total_spent)),
             )
+
+        if self.selected_customer_id in self._customer_ids:
+            self.customer_table.selectRow(self._customer_ids.index(self.selected_customer_id))
+        self.customer_table.blockSignals(False)
 
     # ============================================================
     # CUSTOMER SELECTION
@@ -417,6 +456,7 @@ class CustomersTab(QWidget):
         # --------------------------------------------------------
 
         history = self.db.get_customer_purchase_history(cid)
+        self._history_cache = history
 
         self.history_table.setRowCount(len(history))
 
@@ -433,9 +473,10 @@ class CustomersTab(QWidget):
                 QTableWidgetItem(b["bill_date"]),
             )
 
-            _, items = self.db.get_bill(b["id"])
-
-            piece_count = sum(i["quantity"] for i in items)
+            # Performance fix: piece_count now comes straight from
+            # get_customer_purchase_history()'s query instead of an
+            # extra get_bill() call per row (see database.py).
+            piece_count = b["piece_count"]
 
             self.history_table.setItem(
                 row_idx,
@@ -447,6 +488,20 @@ class CustomersTab(QWidget):
                 row_idx,
                 3,
                 QTableWidgetItem(rupees(b["total"])),
+            )
+
+            bill_id = b["id"]
+
+            view_btn = QPushButton("View")
+            view_btn.setProperty("role", "secondary")
+            view_btn.setProperty("compact", "true")
+            view_btn.clicked.connect(
+                lambda _, bid=bill_id: self._view_bill_by_id(bid)
+            )
+            self.history_table.setCellWidget(
+                row_idx,
+                4,
+                view_btn,
             )
 
             remove_btn = QPushButton("Remove")
@@ -461,8 +516,6 @@ class CustomersTab(QWidget):
                 "true",
             )
 
-            bill_id = b["id"]
-
             remove_btn.clicked.connect(
                 lambda _, bid=bill_id, no=b["bill_no"]: self._delete_bill(
                     bid,
@@ -472,7 +525,7 @@ class CustomersTab(QWidget):
 
             self.history_table.setCellWidget(
                 row_idx,
-                4,
+                5,
                 remove_btn,
             )
 
@@ -708,6 +761,33 @@ class CustomersTab(QWidget):
         self.wishlist_input.clear()
 
         self._refresh_wishlist(self.selected_customer_id)
+
+    # ============================================================
+    # VIEW BILL (from purchase history)
+    # ============================================================
+
+    def _view_bill_by_id(self, bill_id):
+        bill_row, bill_items = self.db.get_bill(bill_id)
+        if bill_row is None:
+            QMessageBox.warning(self, "Bill not found", "That bill could not be loaded.")
+            return
+        dialog = ReceiptDialog(bill_row, bill_items, self)
+        dialog.exec()
+
+    def _view_bill(self):
+        rows = self.history_table.selectionModel().selectedRows()
+        if not rows:
+            return
+        row_idx = rows[0].row()
+        if row_idx >= len(self._history_cache):
+            return
+        bill_id = self._history_cache[row_idx]["id"]
+        bill_row, bill_items = self.db.get_bill(bill_id)
+        if bill_row is None:
+            QMessageBox.warning(self, "Bill not found", "That bill could not be loaded.")
+            return
+        dialog = ReceiptDialog(bill_row, bill_items, self)
+        dialog.exec()
 
     # ============================================================
     # DELETE BILL

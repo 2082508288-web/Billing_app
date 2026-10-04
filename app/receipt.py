@@ -19,16 +19,13 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
 )
-from PySide6.QtCore import QSizeF, QUrl, QByteArray, QBuffer, QIODevice
-from PySide6.QtGui import QTextDocument, QFont, QPageSize, QImage
+from PySide6.QtCore import QSizeF, QUrl, QMarginsF
+from PySide6.QtGui import QTextDocument, QFont, QPageSize, QPageLayout, QImage
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 
 from widgets import rupees
 
-try:
-    import qrcode
-except ImportError:
-    qrcode = None
+import qrcode
 
 
 # ============================================================
@@ -249,24 +246,22 @@ def _upi_payment_uri(bill_row, total):
     params = {
         "pa": UPI_ID,
         "pn": UPI_PAYEE_NAME,
-        "am": f"{max(_num(total), 0.0):.2f}",
         "cu": "INR",
         "tn": f"Invoice {bill_no}",
     }
+    if _num(total) > 0:
+        params["am"] = f"{_num(total):.2f}"
     return "upi://pay?" + urlencode(params)
 
 
 def _make_payment_qr_image(bill_row, total):
     """Create the payment QR as a QImage for QTextDocument."""
-    if qrcode is None:
-        return QImage()
-
     payload = _upi_payment_uri(bill_row, total)
     qr = qrcode.QRCode(
         version=None,
         error_correction=qrcode.constants.ERROR_CORRECT_M,
         box_size=8,
-        border=3,
+        border=4,
     )
     qr.add_data(payload)
     qr.make(fit=True)
@@ -943,9 +938,9 @@ table {{
             </td>
 
             <td class="qr-cell">
-                <img src="qr://invoice-payment" width="88" height="88">
-                <div class="qr-title">SCAN TO PAY</div>
-                <div class="qr-amount">{_money(total)}</div>
+                <img src="qr://invoice-payment" width="132" height="132">
+                <div class="qr-title">{'SCAN TO PAY BALANCE' if _balance_amount(bill_row) > 0 else 'PAID'}</div>
+                <div class="qr-amount">{_money(_balance_amount(bill_row))}</div>
                 <div class="qr-upi">{escape(UPI_ID)}</div>
             </td>
         </tr>
@@ -1102,7 +1097,7 @@ class ReceiptDialog(QDialog):
         # prints correctly in both the A4 printer output and saved PDF.
         qr_image = _make_payment_qr_image(
             bill_row,
-            _value(bill_row, "total", 0),
+            _balance_amount(bill_row),
         )
         if not qr_image.isNull():
             document.addResource(
@@ -1147,13 +1142,7 @@ class ReceiptDialog(QDialog):
     def _configure_printer(printer):
         printer.setResolution(300)
         printer.setPageSize(QPageSize(QPageSize.A4))
-        printer.setPageMargins(
-            4,
-            4,
-            4,
-            4,
-            QPrinter.Millimeter,
-        )
+        printer.setPageMargins(QMarginsF(4, 4, 4, 4), QPageLayout.Millimeter)
 
     def _prepare_document_for_printer(self, printer):
         page_rect = printer.pageRect(QPrinter.Point)

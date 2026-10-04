@@ -94,11 +94,31 @@ class BillingTab(QWidget):
         left.addStretch()
 
         # ---------------- RIGHT column: cart + totals ----------------
+        # Bug fix: this side (cart table + totals + Complete Bill button)
+        # had no scroll fallback at all. On a shorter window -- or the
+        # packaged .exe on a smaller shop-PC monitor -- the cart table
+        # and the Complete Bill button below it could get squeezed
+        # together or clipped, and the only way to reach the button was
+        # to resize the whole OS window. This wraps the same content in
+        # a QScrollArea (matching the pattern already used for the left
+        # column above), so the window can stay whatever size the user
+        # left it, and adding more items to the cart just makes this
+        # side scrollable instead of squeezing the buttons off-screen.
         right = QVBoxLayout()
         right.setSpacing(12)
-        content.addLayout(right, 1)
+        right_widget = QWidget()
+        right_widget.setLayout(right)
 
-        right.addWidget(self._build_cart_box(), 1)
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setWidget(right_widget)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        right_scroll.setStyleSheet(
+            "QScrollArea { border: none; background: transparent; }"
+        )
+        content.addWidget(right_scroll, 1)
+
+        right.addWidget(self._build_cart_box())
         right.addWidget(self._build_totals_box())
 
     def _build_customer_box(self):
@@ -239,6 +259,11 @@ class BillingTab(QWidget):
         self.cart_table.setAlternatingRowColors(True)
         self.cart_table.setColumnHidden(5, True)  # Discount column hidden until toggled
         self.cart_table.itemChanged.connect(self._on_cart_item_changed)
+        # Give the cart a sane minimum height so it stays usable once the
+        # right-hand side is inside a QScrollArea (see _build_ui) --
+        # without this the table could size itself down to near-nothing
+        # and the whole "New Bill" screen would look broken/empty.
+        self.cart_table.setMinimumHeight(220)
         v.addWidget(self.cart_table)
 
         return box
@@ -805,23 +830,33 @@ class BillingTab(QWidget):
             QMessageBox.critical(self, "Could not save bill", str(exc))
             return
 
-        if wishlist_note and customer_id:
-            self.db.add_wishlist(customer_id, wishlist_note)
-
-        # Receipt intentionally remains unchanged for now, as requested.
-        bill_row, saved_bill_items = self.db.get_bill(bill_id)
-        dialog = ReceiptDialog(bill_row, saved_bill_items, self)
-        dialog.exec()
-
-        if self.on_bill_saved:
-            self.on_bill_saved()
-
+        # The sale is committed. Clear the cart before optional receipt work so
+        # a printing error cannot leave it ready to submit a second time.
         self._clear_bill()
         self._clear_customer()
         self._refresh_phone_completer()
+        if self.on_bill_saved:
+            self.on_bill_saved(bill_id)
+
+        if wishlist_note and customer_id:
+            try:
+                self.db.add_wishlist(customer_id, wishlist_note)
+            except Exception as exc:
+                QMessageBox.warning(self, "Bill saved", f"Could not save the customer note: {exc}")
+
+        try:
+            bill_row, saved_bill_items = self.db.get_bill(bill_id)
+            dialog = ReceiptDialog(bill_row, saved_bill_items, self)
+            dialog.exec()
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Bill saved", f"Bill {bill_no} was saved. Open it in Sales History to retry the receipt.\n{exc}"
+            )
 
     def _clear_bill(self):
         self.cart = []
+        self.bill_date_input.setMaximumDate(QDate.currentDate())
+        self.bill_date_input.setDate(QDate.currentDate())
         self._payment_user_edited = False
         self._last_total = 0.0
         self._render_cart()

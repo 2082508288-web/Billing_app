@@ -17,7 +17,8 @@ Design notes:
 
 import sqlite3
 import os
-from datetime import datetime
+import csv
+from datetime import datetime, date, timedelta
 from contextlib import contextmanager
 
 DB_FILENAME = "cloth_shop.db"
@@ -109,6 +110,15 @@ CREATE INDEX IF NOT EXISTS idx_items_barcode ON items(barcode);
 CREATE INDEX IF NOT EXISTS idx_bills_date ON bills(bill_date);
 CREATE INDEX IF NOT EXISTS idx_bill_items_bill ON bill_items(bill_id);
 CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
+
+-- Performance fix: bills.customer_id and bill_items.item_id had no index,
+-- so every customer-history / balances lookup and every "top selling
+-- item" stat was a full table scan. Harmless at a handful of rows, but
+-- this is exactly what turns into visible lag once a shop has a few
+-- hundred bills.
+CREATE INDEX IF NOT EXISTS idx_bills_customer ON bills(customer_id);
+CREATE INDEX IF NOT EXISTS idx_bill_items_item ON bill_items(item_id);
+CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name);
 """
 
 # Purely a starting point matching what the shop described -- fully editable
@@ -126,6 +136,7 @@ DEFAULT_GST_RATE = 5.0
 
 class Database:
     def __init__(self, path: str = None):
+        self.on_change = None
         self.path = path or _default_db_path()
         self._init_schema()
         self._run_migrations()
@@ -143,11 +154,14 @@ class Database:
         try:
             yield conn
             conn.commit()
+            changed = conn.total_changes > 0
         except Exception:
             conn.rollback()
             raise
         finally:
             conn.close()
+        if changed and self.on_change:
+            self.on_change()
 
     def _init_schema(self):
         with self._conn() as conn:
@@ -402,6 +416,8 @@ class Database:
         except ValueError:
             raise ValueError("Invalid expense date. Expected YYYY-MM-DD.")
 
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         with self._conn() as conn:
             cur = conn.execute(
                 """
@@ -410,9 +426,10 @@ class Database:
                     category,
                     amount,
                     payment_mode,
-                    description
+                    description,
+                    created_at
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     expense_date,
@@ -420,6 +437,7 @@ class Database:
                     amount,
                     payment_mode,
                     description,
+                    created_at,
                 ),
             )
 
@@ -672,6 +690,10 @@ class Database:
 
     def _run_migrations(self):
         with self._conn() as conn:
+            # Only databases predating the payment ledger need a paid-sale backfill.
+            had_payments = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='payments'"
+            ).fetchone() is not None
             # -------------------------------------------------
             # GST columns
             # -------------------------------------------------
@@ -759,6 +781,33 @@ class Database:
                 """
             )
 
+            # Bug fix (real root cause): the Expenses tab has always
+            # displayed a "created_at" column (expenses_tab.py refresh()),
+            # and an earlier version of this migration tried to add it
+            # with `DEFAULT (datetime('now','localtime'))`. SQLite only
+            # allows a non-constant ALTER TABLE ... ADD COLUMN default on
+            # a table that has zero rows -- the moment the expenses table
+            # already has a single row (i.e. any shop that had already
+            # been using the app), that ALTER TABLE fails outright with
+            # "Cannot add a column with non-constant default", which
+            # left the column missing and caused sqlite3.Row to raise
+            # "IndexError: No item with that key" the next time
+            # get_expenses() ran (add-expense and every tab refresh).
+            #
+            # Fix: add the column with NO default at all (always legal,
+            # regardless of SQLite version or existing row count), and
+            # stamp new rows with a real timestamp explicitly in
+            # add_expense()'s INSERT instead of relying on a column
+            # default. Existing rows simply get NULL, which the UI
+            # already handles by falling back to an empty string.
+            if not self._column_exists(conn, "expenses", "created_at"):
+                conn.execute(
+                    """
+                    ALTER TABLE expenses
+                    ADD COLUMN created_at TEXT
+                    """
+                )
+
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS employees (
@@ -794,32 +843,33 @@ class Database:
             # completed sale. This prevents every old bill from appearing
             # as an outstanding customer balance after the migration.
             # -------------------------------------------------
-            conn.execute(
-                """
-                INSERT INTO payments(
-                    bill_id,
-                    customer_id,
-                    payment_date,
-                    amount,
-                    payment_mode,
-                    notes
+            if not had_payments:
+                conn.execute(
+                    """
+                    INSERT INTO payments(
+                        bill_id,
+                        customer_id,
+                        payment_date,
+                        amount,
+                        payment_mode,
+                        notes
+                    )
+                    SELECT
+                        b.id,
+                        b.customer_id,
+                        date(b.bill_date),
+                        b.total,
+                        COALESCE(b.payment_mode, 'Cash'),
+                        'Migrated from historical bill'
+                    FROM bills b
+                    WHERE b.total > 0
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM payments p
+                          WHERE p.bill_id = b.id
+                      )
+                    """
                 )
-                SELECT
-                    b.id,
-                    b.customer_id,
-                    date(b.bill_date),
-                    b.total,
-                    COALESCE(b.payment_mode, 'Cash'),
-                    'Migrated from historical bill'
-                FROM bills b
-                WHERE b.total > 0
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM payments p
-                      WHERE p.bill_id = b.id
-                  )
-                """
-            )
 
             # -------------------------------------------------
             # Indexes
@@ -1151,11 +1201,20 @@ class Database:
             conn.execute("DELETE FROM customers WHERE id=?", (cid,))
 
     def get_customer_purchase_history(self, cid):
+        return self.get_ledger_bills(cid)
+
+    def get_ledger_bills(self, customer_id="all"):
+        query = """SELECT b.*,
+                    COALESCE((SELECT SUM(quantity) FROM bill_items WHERE bill_id=b.id), 0) AS piece_count,
+                    COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id=b.id), 0) AS paid_amount
+                   FROM bills b"""
+        params = []
+        if customer_id != "all":
+            query += " WHERE b.customer_id IS ?"
+            params.append(customer_id)
+        query += " ORDER BY b.bill_date DESC, b.id DESC"
         with self._conn() as conn:
-            return conn.execute(
-                """SELECT * FROM bills WHERE customer_id=? ORDER BY bill_date DESC""",
-                (cid,),
-            ).fetchall()
+            return conn.execute(query, params).fetchall()
 
     def get_customer_total_spent(self, cid):
         with self._conn() as conn:
@@ -1407,7 +1466,10 @@ class Database:
     def get_bill(self, bill_id):
         with self._conn() as conn:
             bill = conn.execute(
-                """SELECT bills.*, customers.name AS customer_name, customers.phone AS customer_phone
+                """SELECT bills.*, customers.name AS customer_name, customers.phone AS customer_phone,
+                          customers.address AS customer_address,
+                          COALESCE((SELECT SUM(amount) FROM payments
+                                    WHERE bill_id=bills.id), 0) AS paid_amount
                    FROM bills LEFT JOIN customers ON customers.id = bills.customer_id
                    WHERE bills.id=?""",
                 (bill_id,),
@@ -1571,19 +1633,30 @@ class Database:
             }
 
     def stat_daily_sales(self, date_from=None, date_to=None):
-        """Returns list of (date, revenue) for every day that had sales."""
-        q = """SELECT date(bill_date) AS d, SUM(total) AS revenue
-               FROM bills WHERE 1=1"""
+        """Daily revenue including days without sales within the requested range."""
+        query = "SELECT date(bill_date) AS d, SUM(total) AS revenue FROM bills WHERE 1=1"
         params = []
         if date_from:
-            q += " AND date(bill_date) >= date(?)"
+            query += " AND date(bill_date) >= date(?)"
             params.append(date_from)
         if date_to:
-            q += " AND date(bill_date) <= date(?)"
+            query += " AND date(bill_date) <= date(?)"
             params.append(date_to)
-        q += " GROUP BY date(bill_date) ORDER BY d"
+        query += " GROUP BY date(bill_date) ORDER BY d"
         with self._conn() as conn:
-            return conn.execute(q, params).fetchall()
+            rows = conn.execute(query, params).fetchall()
+        if not date_from and not rows:
+            return []
+        start = date.fromisoformat(date_from or rows[0]["d"])
+        end = date.fromisoformat(date_to or (rows[-1]["d"] if rows else date_from))
+        revenue = {row["d"]: row["revenue"] for row in rows}
+        return [{"d": (start + timedelta(days=i)).isoformat(),
+                 "revenue": revenue.get((start + timedelta(days=i)).isoformat(), 0)}
+                for i in range((end - start).days + 1)]
+
+    def first_bill_date(self):
+        with self._conn() as conn:
+            return conn.execute("SELECT MIN(date(bill_date)) FROM bills").fetchone()[0]
 
     def stat_monthly_sales(self):
         """Returns list of (month 'YYYY-MM', revenue, bill_count) for every
@@ -1665,3 +1738,84 @@ class Database:
         params.append(limit)
         with self._conn() as conn:
             return conn.execute(q, params).fetchall()
+
+    # ---------------------------------------------------------- backup / export
+
+    def backup_database(self, dest_folder=None):
+        """
+        Copies the live database to a timestamped file, using SQLite's own
+        online backup API (safe to call while the app is open and WAL is
+        active -- unlike a plain file copy, this can't grab a half-written
+        page). Returns the full path to the backup file.
+
+        dest_folder defaults to ~/.cloth_shop_billing/backups, next to the
+        live database, alongside the local shop data.
+        """
+        if dest_folder is None:
+            dest_folder = os.path.join(
+                os.path.dirname(self.path), "backups"
+            )
+        os.makedirs(dest_folder, exist_ok=True)
+
+        stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        dest_path = os.path.join(dest_folder, f"cloth_shop_backup_{stamp}.db")
+
+        src_conn = sqlite3.connect(self.path)
+        try:
+            dest_conn = sqlite3.connect(dest_path)
+            try:
+                src_conn.backup(dest_conn)
+            finally:
+                dest_conn.close()
+        finally:
+            src_conn.close()
+
+        return dest_path
+
+    def export_all_tables_csv(self, dest_folder):
+        """
+        Exports every table in the database to its own CSV file inside
+        dest_folder (one file per table: bills.csv, bill_items.csv,
+        customers.csv, items.csv, expenses.csv, payments.csv, etc).
+        This is a read-only export -- the live database is never modified.
+        Returns the list of file paths written.
+        """
+        os.makedirs(dest_folder, exist_ok=True)
+        written = []
+
+        with self._conn() as conn:
+            tables = [
+                r["name"]
+                for r in conn.execute(
+                    """
+                    SELECT name FROM sqlite_master
+                    WHERE type='table' AND name NOT LIKE 'sqlite_%'
+                    ORDER BY name
+                    """
+                ).fetchall()
+            ]
+
+            for table in tables:
+                rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+                out_path = os.path.join(dest_folder, f"{table}.csv")
+                with open(out_path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    if rows:
+                        writer.writerow(rows[0].keys())
+                        for row in rows:
+                            writer.writerow(list(row))
+                    else:
+                        # Still write an (empty) file with just headers,
+                        # taken from the table's own column list, so an
+                        # empty table doesn't just silently vanish from
+                        # the export.
+                        cols = [
+                            c["name"]
+                            for c in conn.execute(
+                                f"PRAGMA table_info({table})"
+                            ).fetchall()
+                        ]
+                        writer.writerow(cols)
+                written.append(out_path)
+
+        return written

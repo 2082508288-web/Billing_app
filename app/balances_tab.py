@@ -105,7 +105,7 @@ class BalancesTab(QWidget):
     def __init__(self, db):
         super().__init__()
         self.db = db
-        self.selected_customer_id = None
+        self.selected_customer_id = "all"
         self._customer_ids = []
         self._bill_ids = []
 
@@ -119,7 +119,7 @@ class BalancesTab(QWidget):
 
         outer.addWidget(
             make_heading(
-                "Customer Balances",
+                "Payments & Balances",
                 "Track credit sales, outstanding balances, and receive later payments",
             )
         )
@@ -145,7 +145,7 @@ class BalancesTab(QWidget):
         outer.addLayout(content, 1)
 
         # ---------------- customers ----------------
-        customers_box = QGroupBox("Customers With Balances")
+        customers_box = QGroupBox("Customer Accounts")
         customers_box.setMinimumWidth(430)
         customers_v = QVBoxLayout(customers_box)
 
@@ -182,7 +182,7 @@ class BalancesTab(QWidget):
         right.setSpacing(12)
         content.addLayout(right, 1)
 
-        details_box = QGroupBox("Customer Ledger")
+        details_box = QGroupBox("Bills & Outstanding Payments")
         details_v = QVBoxLayout(details_box)
 
         self.customer_heading = QLabel("Select a customer")
@@ -199,13 +199,14 @@ class BalancesTab(QWidget):
             ["Bill No", "Date", "Total", "Paid", "Balance", "Status", "Action"]
         )
         bh = self.bill_table.horizontalHeader()
-        bh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        bh.setSectionResizeMode(0, QHeaderView.Stretch)
         bh.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         bh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         bh.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         bh.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         bh.setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        bh.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        bh.setSectionResizeMode(6, QHeaderView.Fixed)
+        self.bill_table.setColumnWidth(6, 100)
         self.bill_table.setEditTriggers(QTableWidget.NoEditTriggers)
         details_v.addWidget(self.bill_table, 1)
 
@@ -219,6 +220,8 @@ class BalancesTab(QWidget):
             ["Date", "Bill No", "Amount", "Mode", "Notes"]
         )
         ph = self.payment_table.horizontalHeader()
+        for column in range(4):
+            ph.setSectionResizeMode(column, QHeaderView.ResizeToContents)
         ph.setSectionResizeMode(4, QHeaderView.Stretch)
         self.payment_table.setEditTriggers(QTableWidget.NoEditTriggers)
         payments_v.addWidget(self.payment_table)
@@ -238,6 +241,11 @@ class BalancesTab(QWidget):
         text = self.search_input.text().strip().lower() if hasattr(self, "search_input") else ""
 
         rows = self.db.get_customer_balances()
+        walk_in = self.db.get_ledger_bills(None)
+        if walk_in:
+            rows.append({"id": None, "name": "Walk-in", "phone": "",
+                         "total_billed": sum(b["total"] for b in walk_in),
+                         "total_paid": sum(b["paid_amount"] for b in walk_in)})
 
         total_billed = sum(float(r["total_billed"] or 0) for r in rows)
         total_paid = sum(float(r["total_paid"] or 0) for r in rows)
@@ -260,6 +268,12 @@ class BalancesTab(QWidget):
             # checking a customer's complete ledger.
             filtered.append((row, balance))
 
+        all_row = {"id": "all", "name": "All customers", "phone": "",
+                   "total_billed": total_billed, "total_paid": total_paid}
+        filtered.insert(0, (all_row, total_balance))
+        selected_id = self.selected_customer_id
+        self.customer_table.blockSignals(True)
+        self.customer_table.clearSelection()
         self.customer_table.setRowCount(len(filtered))
         self._customer_ids = []
 
@@ -270,8 +284,12 @@ class BalancesTab(QWidget):
             self.customer_table.setItem(i, 2, QTableWidgetItem(rupees(row["total_billed"] or 0)))
             self.customer_table.setItem(i, 3, QTableWidgetItem(rupees(balance)))
 
-        if self.selected_customer_id:
-            self._load_customer(self.selected_customer_id)
+        if selected_id not in self._customer_ids:
+            selected_id = "all"
+        self.selected_customer_id = selected_id
+        self.customer_table.selectRow(self._customer_ids.index(selected_id))
+        self.customer_table.blockSignals(False)
+        self._load_customer(selected_id)
 
     def _on_customer_selected(self):
         rows = self.customer_table.selectionModel().selectedRows()
@@ -286,25 +304,24 @@ class BalancesTab(QWidget):
         self._load_customer(self.selected_customer_id)
 
     def _load_customer(self, customer_id):
-        customer = self.db.get_customer_by_id(customer_id)
-        if not customer:
-            self.selected_customer_id = None
-            return
-
-        balance_info = self.db.get_customer_balance(customer_id)
-        billed = float(balance_info["total_billed"] or 0)
-        paid = float(balance_info["total_paid"] or 0)
-        balance = max(billed - paid, 0)
-
-        self.customer_heading.setText(customer["name"])
+        history = self.db.get_ledger_bills(customer_id)
+        if customer_id == "all":
+            heading = "All customers · including walk-in sales"
+        elif customer_id is None:
+            heading = "Walk-in sales"
+        else:
+            customer = self.db.get_customer_by_id(customer_id)
+            if not customer:
+                self.selected_customer_id = "all"
+                return self._load_customer("all")
+            heading = customer["name"]
+        billed = sum(b["total"] for b in history)
+        paid = sum(b["paid_amount"] for b in history)
+        self.customer_heading.setText(heading)
         self.customer_summary.setText(
-            f"Phone: {customer['phone'] or '-'}  •  "
-            f"Total billed: {rupees(billed)}  •  "
-            f"Paid: {rupees(paid)}  •  "
-            f"Outstanding: {rupees(balance)}"
+            f"{len(history)} bills  •  Billed: {rupees(billed)}  •  "
+            f"Paid: {rupees(paid)}  •  Outstanding: {rupees(max(billed - paid, 0))}"
         )
-
-        history = self.db.get_customer_purchase_history(customer_id)
 
         self.bill_table.setRowCount(len(history))
         self._bill_ids = []
@@ -315,7 +332,7 @@ class BalancesTab(QWidget):
             bill_id = bill["id"]
             self._bill_ids.append(bill_id)
 
-            bill_paid = float(self.db.get_bill_paid_amount(bill_id) or 0)
+            bill_paid = float(bill["paid_amount"] or 0)
             bill_balance = max(float(bill["total"]) - bill_paid, 0)
 
             self.bill_table.setItem(i, 0, QTableWidgetItem(bill["bill_no"]))
@@ -329,6 +346,7 @@ class BalancesTab(QWidget):
 
             if bill_balance > 0.005:
                 receive_btn = QPushButton("Receive")
+                receive_btn.setProperty("compact", "true")
                 receive_btn.clicked.connect(
                     lambda _, b=dict(bill): self._receive_payment(b)
                 )
@@ -341,6 +359,7 @@ class BalancesTab(QWidget):
             for payment in self.db.get_bill_payment_history(bill_id):
                 all_payments.append((payment, bill["bill_no"]))
 
+        all_payments.sort(key=lambda entry: (entry[0]["payment_date"], entry[0]["id"]), reverse=True)
         self.payment_table.setRowCount(len(all_payments))
 
         for i, (payment, bill_no) in enumerate(all_payments):
