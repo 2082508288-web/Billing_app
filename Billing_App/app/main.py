@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
-    QLabel,
     QPushButton,
     QInputDialog,
     QLineEdit,
@@ -64,8 +63,6 @@ class MainWindow(QMainWindow):
 
         access_bar = QHBoxLayout()
         access_bar.setContentsMargins(16, 10, 16, 10)
-        self.role_label = QLabel()
-        access_bar.addWidget(self.role_label)
         access_bar.addStretch()
         self.admin_button = QPushButton("Admin login")
         self.admin_button.clicked.connect(self._login_admin)
@@ -113,10 +110,6 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(0)
         self.tabs.blockSignals(False)
         admin = self.session.is_admin
-        self.role_label.setText(
-            "Admin dashboard — full access" if admin else
-            "Employee dashboard — billing only · full payment · GST included in total"
-        )
         self.admin_button.setVisible(not admin)
         self.logout_button.setVisible(admin)
         self.setWindowTitle("Cloth Shop Billing System — " + ("Admin" if admin else "Employee"))
