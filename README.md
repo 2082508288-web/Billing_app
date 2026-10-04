@@ -6,7 +6,7 @@ The app opens in **Employee** mode: existing catalog items, fixed prices with
 automatic admin-defined offers, quantities, customer details, full payment and receipts. GST is automatically included in the
 amount due using the existing calculation: a ₹100 price with 5% GST totals ₹105.
 
-**Admin login** unlocks offers, manual discounts, partial payments, credit, inventory, customers,
+**Admin login** unlocks exchanges, offers, manual discounts, partial payments, credit, inventory, customers,
 balances, expenses, sales history, statistics, and the backup/export tools available
 in the recommended copy. **Lock admin / Employee mode** clears the unfinished bill
 and returns to employee access. Restarting always begins in Employee mode.
@@ -176,3 +176,38 @@ Pricing rules:
 Billing fetches only the category / brand rules relevant to cart items through a
 unique active-scope index. It does not load the entire offer list. Large quantities
 are calculated per cart line rather than expanding into individual pieces.
+
+## Admin exchanges
+
+Open **Admin → Exchanges** and search by the customer's **full phone number** or
+an **exact bill number** (letter case does not matter). Select the original bill,
+check its receipt if needed, and choose the number of pieces being returned.
+Then click **Continue to new purchases**, scan/add the replacement items and any
+extra purchases, choose the payment method, and complete the bill.
+
+- New purchases, including GST and current offers/discounts, must cost **strictly
+  more** than the returned items. Collect the entire positive difference. Equal
+  or lower totals are blocked; there are no refunds or store credits.
+- Return value uses the original paid price, including its discounts/offers and
+  GST. Later catalog price changes do not change that value. Partial quantities
+  divide the original line value, with cumulative cent allocation so returning
+  every piece never loses or creates money. A ₹2,100 three-piece line credits
+  ₹700 for one piece. The remaining pieces keep their original prices.
+- Settle any outstanding payment on the original bill in **Balances** first.
+  Walk-in bills can be found by bill number without adding a customer phone.
+- The original bill stays intact. A linked exchange receipt shows returned lines
+  as negatives, new purchases as positives, and the difference paid. It can be
+  reprinted from Sales History, Customers, or Balances. Bills linked to an
+  exchange cannot be deleted because that would break stock/payment history.
+- Returned quantities are restored to stock; new purchases deduct stock. Saving
+  the exchange, returned quantities, stock and payment is one transaction. The
+  same original piece cannot be returned twice. Retrying the same save does not
+  create another bill. New purchased pieces can later be exchanged using their
+  full purchase value on the linked receipt.
+- Reports record the net sale and pieces on the exchange date, and only the new
+  money collected. Original sale dates remain unchanged. Product/category charts
+  use signed bars when the selected period contains a negative net group, so
+  returned value is included correctly. Bill counts include exchange receipts.
+- Lookup uses indexed phone/bill matching and 100 bills per page. Employees cannot
+  access the exchange screens or commands. Existing optional database fields
+  remain optional; exchange history uses additional tables.

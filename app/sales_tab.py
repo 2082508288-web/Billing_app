@@ -142,7 +142,11 @@ class SalesTab(QWidget):
             return
         if not confirm_delete_password(self, f"remove bill '{bill_no}'"):
             return
-        self.db.delete_bill(bill_id)
+        try:
+            self.db.delete_bill(bill_id)
+        except ValueError as exc:
+            QMessageBox.warning(self, 'Cannot remove bill', str(exc))
+            return
         self.refresh()
 
     def _export_csv(self):

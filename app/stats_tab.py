@@ -249,6 +249,21 @@ class StatsTab(QWidget):
     def _refresh_category_chart(self, date_from, date_to):
         product = self.chart_group.currentText() == 'Products'
         rows = self._report['products' if product else 'categories']
+        if any(r['revenue'] < 0 for r in rows):
+            ranked = sorted(rows, key=lambda r: abs(r['revenue']), reverse=True)
+            names = [(f"{r['name']} ({r['category']})" if product else r['category']) for r in ranked[:8]]
+            values = [r['revenue'] for r in ranked[:8]]
+            if len(ranked)>8:
+                names.append('Other (net)')
+                values.append(sum(r['revenue'] for r in ranked[8:]))
+            self.category_figure.clear()
+            ax = self.category_figure.add_subplot(111)
+            ax.barh(names, values, color=[COLORS['primary'] if value>=0 else COLORS['accent'] for value in values])
+            ax.axvline(0, color=COLORS['muted'], linewidth=1)
+            ax.set_title('Net sales after exchanges — ' + ('products' if product else 'categories'))
+            ax.set_xlabel('Revenue (Rs.)')
+            self.category_canvas.draw_idle()
+            return
         rows = [r for r in rows if r['revenue'] > 0]
         names = [(f"{r['name']} ({r['category']})" if product else r['category']) for r in rows]
         values = [r['revenue'] for r in rows]

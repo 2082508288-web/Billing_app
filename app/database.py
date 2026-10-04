@@ -23,6 +23,7 @@ from contextlib import contextmanager
 from money import money
 from reporting import ReportingQueries, money_cents, MoneySum
 from offers import OfferQueries
+from exchanges import ExchangeQueries
 
 DB_FILENAME = "cloth_shop.db"
 
@@ -128,13 +129,14 @@ STARTER_SUBTYPES = {
 DEFAULT_GST_RATE = 5.0
 
 
-class Database(ReportingQueries, OfferQueries):
+class Database(ReportingQueries, OfferQueries, ExchangeQueries):
     def __init__(self, path: str = None):
         self.path = path or _default_db_path()
         self._init_schema()
         self._run_migrations()
         self._ensure_report_indexes()
         self._ensure_offer_schema()
+        self._ensure_exchange_schema()
 
     @contextmanager
     def _conn(self):
@@ -1510,8 +1512,12 @@ class Database(ReportingQueries, OfferQueries):
         with self._conn() as conn:
             bill = conn.execute(
                 """SELECT bills.*, customers.name AS customer_name, customers.phone AS customer_phone,
+                          original.bill_no AS exchange_from_no, e.returned_cents AS exchange_returned_cents,
+                          e.replacement_cents AS exchange_replacement_cents,
                           (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE bill_id=bills.id) AS paid_amount
                    FROM bills LEFT JOIN customers ON customers.id = bills.customer_id
+                   LEFT JOIN exchanges e ON e.exchange_bill_id=bills.id
+                   LEFT JOIN bills original ON original.id=e.source_bill_id
                    WHERE bills.id=?""",
                 (bill_id,),
             ).fetchone()
@@ -1530,6 +1536,9 @@ class Database(ReportingQueries, OfferQueries):
         that were deducted when the bill was made."""
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if conn.execute('SELECT 1 FROM exchanges WHERE source_bill_id=? OR exchange_bill_id=? LIMIT 1',
+                            (bill_id,bill_id)).fetchone():
+                raise ValueError('Bills linked to exchanges cannot be deleted; their stock and payment history must remain intact.')
             items = conn.execute(
                 "SELECT item_id, COALESCE(stock_deducted, quantity) AS stock_deducted FROM bill_items WHERE bill_id=?", (bill_id,)
             ).fetchall()

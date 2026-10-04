@@ -88,3 +88,15 @@ GUI create/edit/disable, prefix search/paging, migration preservation and indexe
 lookup plans. Randomized small carts are compared with a simple expanded-piece
 reference calculation. The one-million-rule benchmark is a separate synthetic
 stress probe, not part of ordinary unittest discovery.
+
+## Exchange checks
+
+`test_exchanges.py` exercises admin-only lookup/cart flow, indexed phone and bill
+queries, walk-in receipts, original-price valuation, discounts and GST, legacy
+bill allocation, partial return cents, strictly higher purchase values/full
+settlement, concurrent duplicate-return prevention, idempotent save retries,
+transaction rollback, current offer checks, restocking, subsequent exchanges,
+linked receipt/deletion rules, signed reporting and additive schema preservation.
+The same tests run against both desktop copies with `BILLING_APP_DIR` above.
+Offscreen screen/PDF rendering and a 100,000-bill synthetic lookup benchmark
+complement the suite; native Windows and physical printing still need Windows.

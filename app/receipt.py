@@ -330,6 +330,17 @@ def build_receipt_html(bill_row, bill_items):
     cgst_amount = gst_amount / 2 if gst_amount else 0.0
     sgst_amount = gst_amount / 2 if gst_amount else 0.0
 
+    is_exchange = bool(_value(bill_row, 'exchange_from_no', ''))
+    cgst_label = 'CGST adjustment' if is_exchange else f'CGST ({gst_rate / 2:g}%)'
+    sgst_label = 'SGST adjustment' if is_exchange else f'SGST ({gst_rate / 2:g}%)'
+    exchange_note = ''
+    if _value(bill_row, 'exchange_from_no', ''):
+        exchange_note = (f'<div class="amount-words"><b>Exchange against '
+                         f'{escape(str(_value(bill_row, "exchange_from_no", "")))}</b><br>'
+                         f'New purchases: {_money(_value(bill_row, "exchange_replacement_cents", 0)/100)} · '
+                         f'Returned value: {_money(_value(bill_row, "exchange_returned_cents", 0)/100)} · '
+                         f'Difference paid: {_money(total)}. No refund.</div>')
+
     item_rows = []
 
     for index, item in enumerate(bill_items, start=1):
@@ -373,6 +384,8 @@ def build_receipt_html(bill_row, bill_items):
         line_sgst = line_gst_amount / 2
 
         description = escape(name)
+        if quantity < 0:
+            description += '<div class="item-category">Returned item — original paid value credited</div>'
         offer_name = _value(item, 'offer_name_snapshot', '')
         if offer_name:
             description += (f'<div class="item-category">Offer: {escape(str(offer_name))}'
@@ -928,11 +941,11 @@ table {{
                         <td class="summary-value">{_money(discount_amount)}</td>
                     </tr>
                     <tr>
-                        <td class="summary-label">CGST ({gst_rate / 2:g}%)</td>
+                        <td class="summary-label">{cgst_label}</td>
                         <td class="summary-value">{_money(cgst_amount)}</td>
                     </tr>
                     <tr>
-                        <td class="summary-label">SGST ({gst_rate / 2:g}%)</td>
+                        <td class="summary-label">{sgst_label}</td>
                         <td class="summary-value">{_money(sgst_amount)}</td>
                     </tr>
                     <tr>
@@ -956,6 +969,7 @@ table {{
     </table>
 
 
+    {exchange_note}
     <div class="amount-words">
         <b>Amount in Words:</b>
         {escape(_amount_in_words(total))}
@@ -1026,6 +1040,11 @@ def build_receipt_text(bill_row, bill_items):
         f"{'Item':30} {'Qty':>5} {'Rate':>12} {'Amount':>14}",
         "-" * 75,
     ]
+
+    if _value(bill_row, 'exchange_from_no', ''):
+        lines.append(f"Exchange against {_value(bill_row, 'exchange_from_no', '')}")
+        lines.append(f"Returned value: {_money(_value(bill_row, 'exchange_returned_cents', 0)/100)}; "
+                     f"New purchases: {_money(_value(bill_row, 'exchange_replacement_cents', 0)/100)}; no refund.")
 
     for item in bill_items:
         name = str(

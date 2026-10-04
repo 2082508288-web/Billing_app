@@ -210,7 +210,7 @@ class ReportingQueries:
                 SELECT CASE WHEN MAX(CASE WHEN
                     ABS(bi.subtotal*100-ROUND(bi.subtotal*100)) > 0.000001 OR
                     ABS(bi.gst_amount*100-ROUND(bi.gst_amount*100)) > 0.000001 OR
-                    bi.subtotal < 0 OR bi.gst_amount < 0 THEN 1 ELSE 0 END)=0
+                    ((bi.subtotal < 0 OR bi.gst_amount < 0) AND NOT EXISTS(SELECT 1 FROM exchanges e WHERE e.exchange_bill_id=b.id)) THEN 1 ELSE 0 END)=0
                     THEN SUM({cents('bi.subtotal')}+{cents('bi.gst_amount')}) END
                 FROM bill_items bi WHERE bi.bill_id=b.id)
                 THEN 0 ELSE 1 END AS legacy

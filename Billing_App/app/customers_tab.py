@@ -821,7 +821,11 @@ class CustomersTab(QWidget):
         ):
             return
 
-        self.db.delete_bill(bill_id)
+        try:
+            self.db.delete_bill(bill_id)
+        except ValueError as exc:
+            QMessageBox.warning(self, 'Cannot remove bill', str(exc))
+            return
 
         self._refresh_customer_list()
 
