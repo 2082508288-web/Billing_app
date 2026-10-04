@@ -313,7 +313,8 @@ class InventoryTab(QWidget):
             return
         confirm = QMessageBox.question(
             self, "Delete Category",
-            f"Delete category '{item.text()}'? Items using it must be removed first."
+            f"Remove category '{item.text()}'? Active items must be removed or moved first. "
+            "Removed items and past sales will remain archived."
         )
         if confirm == QMessageBox.Yes:
             try:

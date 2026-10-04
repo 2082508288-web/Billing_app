@@ -1,4 +1,7 @@
 @echo off
+setlocal
+pushd "%~dp0"
+if errorlevel 1 exit /b 1
 echo ================================================================
 echo  Cloth Shop Billing System - Full Setup
 echo ================================================================
@@ -10,8 +13,7 @@ echo.
 echo It does NOT touch your shop's existing database. The database
 echo always lives at:
 echo    %%USERPROFILE%%\.cloth_shop_billing\cloth_shop.db
-echo and both the desktop app and its built-in "Start Server" feature
-echo already read and write that exact same file -- this script does
+echo The desktop app reads and writes that file. This script does
 echo not create, move, or reset it.
 echo.
 pause
@@ -22,31 +24,23 @@ if errorlevel 1 (
     echo ERROR: Python was not found on PATH.
     echo Install Python 3.10+ from https://python.org and tick
     echo "Add python.exe to PATH" during install, then run this again.
+    popd
     pause
     exit /b 1
 )
 
 echo.
-echo Step 1/3: Installing the desktop app's dependencies...
-echo   (PySide6, matplotlib, plus fastapi/uvicorn/qrcode for the
-echo    built-in Start Server feature -- these used to be missing,
-echo    which is why Start Server failed after a fresh setup.)
-pip install -r app\requirements.txt
+echo Step 1/2: Installing the desktop app's dependencies...
+python -m pip install -r app\requirements.txt
 if errorlevel 1 goto :pipfail
 
 echo.
-echo Step 2/3: Installing the local web server's dependencies...
-pip install -r clothshop_billing_server\backend\requirements.txt
+echo Step 2/2: Building ClothShopBilling.exe...
+python -m pip install pyinstaller
 if errorlevel 1 goto :pipfail
 
-echo.
-echo Step 3/3: Building ClothShopBilling.exe...
-pip install pyinstaller
-if errorlevel 1 goto :pipfail
-
-cd app
-call build_windows.bat
-cd ..
+call app\build_windows.bat
+if errorlevel 1 goto :buildfail
 
 echo.
 echo ================================================================
@@ -65,6 +59,7 @@ echo Tip: use the "Backup Database Now" and "Export Whole Database
 echo (CSV)" buttons on the Application Status tab any time you want a
 echo safety copy of your data.
 echo.
+popd
 pause
 exit /b 0
 
@@ -73,5 +68,12 @@ echo.
 echo Something went wrong installing packages above. Scroll up to see
 echo the error, fix it (often just re-running as Administrator, or
 echo checking your internet connection), then run setup.bat again.
+popd
+pause
+exit /b 1
+
+:buildfail
+echo Executable build failed. Setup did not complete.
+popd
 pause
 exit /b 1

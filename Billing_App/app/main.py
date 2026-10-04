@@ -34,72 +34,6 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 
-def run_embedded_server():
-    """
-    Entry point used when this program is launched as
-    `ClothShopBilling.exe --run-server`.
-
-    Bug fix: the Application Status tab's "Start Server" button has
-    always launched the server this way once the app is packaged as a
-    .exe -- there's normally no separate Python interpreter on the shop
-    PC to run clothshop_billing_server/run_server.py directly, so
-    status_tab.py re-launches the exe itself with this flag instead.
-    The problem was that main.py never actually checked for the flag,
-    so "Start Server" just opened a second full GUI window instead of a
-    server -- which is exactly what staff were seeing as "errors" when
-    turning the server on and off. This makes the flag do what it was
-    always meant to: run the FastAPI server in this process.
-
-    It uses the exact same shared database
-    (~/.cloth_shop_billing/cloth_shop.db) the desktop app already uses --
-    nothing about the schema, the data, or its location changes.
-    """
-    import importlib.util
-
-    # Bundling layout differs between a source checkout and a frozen
-    # .exe: in source, clothshop_billing_server/ sits one level above
-    # this file (app/main.py); in a frozen build it's bundled at the
-    # root of the PyInstaller bundle (see build_windows.bat's
-    # --add-data), so resource_path() finds it directly. Mirrors the
-    # same frozen/source branching status_tab.py already does for the
-    # QR code image.
-    if getattr(sys, "frozen", False):
-        server_root = resource_path("clothshop_billing_server")
-    else:
-        server_root = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "clothshop_billing_server")
-        )
-
-    backend_dir = os.path.join(server_root, "backend")
-    main_py_path = os.path.join(backend_dir, "main.py")
-
-    if not os.path.exists(main_py_path):
-        print(f"ERROR: server backend not found at {main_py_path}")
-        sys.exit(1)
-
-    # backend/main.py does `from database import Database` (a bare,
-    # same-folder import), so backend_dir must be on sys.path before we
-    # load it -- exactly like running `python main.py` from inside that
-    # folder would give it for free.
-    if backend_dir not in sys.path:
-        sys.path.insert(0, backend_dir)
-
-    # Loaded by file path (not `import main`) so this can never collide
-    # with this file -- the desktop app's own main.py -- regardless of
-    # how Python happens to have named this running script in
-    # sys.modules.
-    spec = importlib.util.spec_from_file_location(
-        "clothshop_server_main", main_py_path
-    )
-    server_main = importlib.util.module_from_spec(spec)
-    sys.modules["clothshop_server_main"] = server_main
-    spec.loader.exec_module(server_main)
-
-    import uvicorn
-
-    uvicorn.run(server_main.app, host="0.0.0.0", port=5000, log_level="info")
-
-
 APP_ICON_PATH = resource_path(os.path.join("assets", "icon.ico"))
 
 
@@ -150,11 +84,8 @@ class MainWindow(QMainWindow):
     def _on_catalog_changed(self):
         self.billing_tab.refresh_catalog()
 
-    def closeEvent(self, event):
-        self.status_tab.shutdown_server()
-        event.accept()
-
     def _on_bill_saved(self):
+        self.inventory_tab._refresh_items()
         self.sales_tab.refresh()
         self.stats_tab.refresh()
         self.customers_tab._refresh_customer_list()
@@ -173,6 +104,8 @@ class MainWindow(QMainWindow):
             self.balances_tab.refresh()
         elif widget is self.expenses_tab:
             self.expenses_tab.refresh()
+        elif widget is self.inventory_tab:
+            self.inventory_tab._refresh_items()
 
 
 def main():
@@ -189,11 +122,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # Must be checked before QApplication is created -- when frozen and
-    # re-launched with this flag (see status_tab.py / run_embedded_server
-    # above), this process should run headless as the FastAPI server,
-    # never open a GUI window at all.
-    if "--run-server" in sys.argv:
-        run_embedded_server()
-    else:
-        main()
+    main()
