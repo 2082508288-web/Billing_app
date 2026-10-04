@@ -71,3 +71,43 @@ See [tests/README.md](tests/README.md) for regression commands and historical da
 limitations. A native Windows build and packaged-app startup check is still
 required before distributing an executable; Linux and wheel-resolution checks
 alone do not establish that the packaged Windows application runs.
+
+## Reports and date filters
+
+Sales History, Balances, Expenses and Statistics share these period choices:
+Today, Last 7 days, Last 30 days, This month, Selected month, Month range,
+Custom dates and All time. Month ranges include both entire months; custom
+ranges include both boundary days, including bills with timestamps. All time
+includes every recorded date. Select a month to see that month's bills immediately.
+Changing a filter refreshes the report; **Apply / Refresh** reloads current data.
+Invalid ranges clear the result and prevent an export of stale rows.
+
+CSV exports use the current period and any search/category filter, even if you
+haven't pressed Refresh. Balances offers an export of all matched bills and a
+separate export of the selected customer's payments. Statistics exports its
+summary metrics and the selected period's daily, monthly, product and category
+series. CSV is UTF-8 for Excel, with spreadsheet formulas escaped in text fields.
+
+Statistics includes total revenue, expenses, net profit, payments collected,
+outstanding credit, bill count, pieces sold, average bill value, and daily mean,
+median and population standard deviation. Daily statistics use days with sales,
+including days with zero-value bills. Monthly and daily bars use the selected
+period. The doughnut chart switches between products and categories; small groups
+beyond the top eight are combined as Other.
+
+Definitions:
+
+- Revenue uses bill dates and includes GST. Net profit here means billed revenue
+  minus recorded expenses; the app does not track item purchase cost separately.
+- Payments collected uses payment dates, including collections on older bills.
+- Outstanding means the current unpaid amount on bills issued in the period.
+  Balances' "Paid toward these bills" includes later payments too. Its separate
+  payment history uses the payment-date filter.
+- Product/category revenue allocates each bill's total to its lines, including
+  historical bill-level discounts and GST. Allocations retain exact cents so
+  chart totals reconcile to billed revenue.
+
+Click a bill row in Balances or Customers' Purchase History to view, print or save
+its receipt. Clicking a payment row in Balances opens that payment's bill receipt.
+The Balances panes can be resized by dragging their dividers. Receive-payment and
+delete buttons keep their own actions. All reporting tools remain admin-only.

@@ -7,6 +7,7 @@ next" requests across all customers).
 """
 
 import statistics
+import textwrap
 
 import matplotlib
 matplotlib.use("QtAgg")
@@ -16,13 +17,15 @@ from matplotlib.figure import Figure
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QComboBox, QDateEdit,
-    QGridLayout, QScrollArea
+    QGridLayout, QScrollArea, QLayout
 )
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor
 
 from widgets import rupees, make_heading, make_stat_card
 from theme import COLORS
+from period_filter import PeriodFilter
+from report_export import export_csv
 
 
 class StatsTab(QWidget):
@@ -37,6 +40,8 @@ class StatsTab(QWidget):
         outer_scroll.setWidgetResizable(True)
         outer_scroll.setStyleSheet("QScrollArea { border: none; }")
         container = QWidget()
+        container.setObjectName("statisticsPage")
+        container.setStyleSheet(f"QWidget#statisticsPage {{ background: {COLORS['bg']}; }}")
         outer_scroll.setWidget(container)
 
         page = QVBoxLayout(self)
@@ -44,6 +49,7 @@ class StatsTab(QWidget):
         page.addWidget(outer_scroll)
 
         outer = QVBoxLayout(container)
+        outer.setSizeConstraint(QLayout.SetMinimumSize)
         outer.setContentsMargins(16, 16, 16, 16)
         outer.setSpacing(14)
 
@@ -51,16 +57,18 @@ class StatsTab(QWidget):
         header_row.addWidget(make_heading("Statistics", "Sales trends, best sellers, and what customers want"))
         header_row.addStretch()
 
-        self.quick_range_combo = QComboBox()
-        self.quick_range_combo.addItems(["Last 30 days", "Last 7 days", "This month", "All time"])
-        self.quick_range_combo.currentTextChanged.connect(self.refresh)
-        header_row.addWidget(QLabel("Period:"))
-        header_row.addWidget(self.quick_range_combo)
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.setProperty("role", "secondary")
-        refresh_btn.clicked.connect(self.refresh)
-        header_row.addWidget(refresh_btn)
+        export = QPushButton("Export CSV")
+        export.clicked.connect(self._export_csv)
+        header_row.addWidget(export)
         outer.addLayout(header_row)
+        self.period = PeriodFilter()
+        self.quick_range_combo = self.period.preset
+        self.period.changed.connect(self.refresh)
+        outer.addWidget(self.period)
+        self.query_note = QLabel("Revenue includes GST; net profit = billed revenue − recorded expenses. "
+                                 "Collections use payment dates; outstanding is current balance on selected bills.")
+        self.query_note.setWordWrap(True)
+        outer.addWidget(self.query_note)
 
         # ---------------- KPI cards ----------------
         self.kpi_grid = QGridLayout()
@@ -68,25 +76,37 @@ class StatsTab(QWidget):
         outer.addLayout(self.kpi_grid)
 
         # ---------------- charts row ----------------
-        charts_row = QHBoxLayout()
-        charts_row.setSpacing(12)
-        outer.addLayout(charts_row)
 
         trend_box = QGroupBox("Daily Sales Trend (with mean & std. dev.)")
+        trend_box.setMinimumHeight(390)
         trend_v = QVBoxLayout(trend_box)
         self.trend_figure = Figure(figsize=(6, 3.6), constrained_layout=True)
         self.trend_canvas = FigureCanvas(self.trend_figure)
-        self.trend_canvas.setMinimumHeight(300)
+        self.trend_canvas.setMinimumHeight(340)
         trend_v.addWidget(self.trend_canvas)
-        charts_row.addWidget(trend_box, 2)
+        outer.addWidget(trend_box)
 
-        category_box = QGroupBox("Sales by Category")
+        category_box = QGroupBox("Share of Sales")
+        category_box.setMinimumHeight(460)
         category_v = QVBoxLayout(category_box)
+        self.chart_group = QComboBox()
+        self.chart_group.addItems(["Products", "Categories"])
+        self.chart_group.currentTextChanged.connect(self.refresh)
+        category_v.addWidget(self.chart_group)
         self.category_figure = Figure(figsize=(4.2, 3.6), constrained_layout=True)
         self.category_canvas = FigureCanvas(self.category_figure)
-        self.category_canvas.setMinimumHeight(300)
+        self.category_canvas.setMinimumHeight(360)
         category_v.addWidget(self.category_canvas)
-        charts_row.addWidget(category_box, 1)
+        outer.addWidget(category_box)
+
+        monthly_box = QGroupBox("Monthly Sales — selected period")
+        monthly_box.setMinimumHeight(390)
+        monthly_v = QVBoxLayout(monthly_box)
+        self.monthly_figure = Figure(figsize=(10, 3.6), constrained_layout=True)
+        self.monthly_canvas = FigureCanvas(self.monthly_figure)
+        self.monthly_canvas.setMinimumHeight(340)
+        monthly_v.addWidget(self.monthly_canvas)
+        outer.addWidget(monthly_box)
 
         # ---------------- top items ----------------
         top_items_box = QGroupBox("Best Selling Items")
@@ -104,6 +124,8 @@ class StatsTab(QWidget):
         self.top_items_table = QTableWidget(0, 4)
         self.top_items_table.setHorizontalHeaderLabels(["Item", "Category", "Qty Sold", "Revenue"])
         self.top_items_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for column in (1, 2, 3):
+            self.top_items_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
         self.top_items_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.top_items_table.setMinimumHeight(260)
         top_items_v.addWidget(self.top_items_table)
@@ -136,92 +158,68 @@ class StatsTab(QWidget):
 
     # ------------------------------------------------------------- helpers
     def _date_range(self):
-        today = QDate.currentDate()
-        label = self.quick_range_combo.currentText()
-        if label == "Last 7 days":
-            frm = today.addDays(-6)
-        elif label == "This month":
-            frm = QDate(today.year(), today.month(), 1)
-        elif label == "All time":
-            frm = QDate(2000, 1, 1)
-        else:  # Last 30 days
-            frm = today.addDays(-29)
-        return frm.toString("yyyy-MM-dd"), today.toString("yyyy-MM-dd")
+        return self.period.bounds()
 
     def refresh(self):
-        date_from, date_to = self._date_range()
+        try:
+            date_from, date_to = self._date_range()
+        except ValueError as exc:
+            self.query_note.setText(str(exc))
+            self._report = None
+            self._clear_grid()
+            for figure, canvas in ((self.trend_figure, self.trend_canvas),
+                                   (self.category_figure, self.category_canvas),
+                                   (self.monthly_figure, self.monthly_canvas)):
+                figure.clear()
+                canvas.draw()
+            for table in (self.top_items_table, self.top_customers_table, self.wishlist_table):
+                table.setRowCount(0)
+            return False
+        self.query_note.setText("Revenue includes GST; net profit = revenue − recorded expenses (item purchase cost is not tracked). "
+                               "Collections use payment dates; outstanding is current balance on selected bills. "
+                               "Daily mean, median and population std. dev. use days with sales.")
+        self._report = self.db.report_statistics(date_from, date_to)
         self._refresh_kpis(date_from, date_to)
         self._refresh_trend_chart(date_from, date_to)
         self._refresh_category_chart(date_from, date_to)
+        self._refresh_monthly_chart()
         self._refresh_top_items(date_from, date_to)
         self._refresh_top_customers(date_from, date_to)
         self._refresh_wishlist()
+        return True
 
     def _clear_grid(self):
         while self.kpi_grid.count():
             child = self.kpi_grid.takeAt(0)
             if child.widget():
+                child.widget().hide()
                 child.widget().deleteLater()
 
     def _refresh_kpis(self, date_from, date_to):
         self._clear_grid()
-        totals = self.db.stat_totals(date_from, date_to)
-        daily = self.db.stat_daily_sales(date_from, date_to)
-        revenues = [d["revenue"] for d in daily]
-        mean_daily = statistics.mean(revenues) if revenues else 0
-        std_daily = statistics.pstdev(revenues) if len(revenues) > 1 else 0
-
+        totals = self._report['totals']
         cards = [
-            make_stat_card(
-                "Total Revenue",
-                rupees(totals["revenue"]),
-                f"{totals['bill_count']} bill(s)",
-            ),
-            make_stat_card(
-                "Total Expenses",
-                rupees(totals["expenses"]),
-                "business costs in period",
-            ),
-            make_stat_card(
-                "Net Profit",
-                rupees(totals["net_profit"]),
-                "Revenue − Expenses",
-            ),
-            make_stat_card(
-                "Payments Collected",
-                rupees(totals["payments_collected"]),
-                "cash/credit payments received",
-            ),
-            make_stat_card(
-                "Outstanding Credit",
-                rupees(totals["outstanding"]),
-                "unpaid balance",
-            ),
-            make_stat_card("Pieces Sold", str(totals["pieces"]), ""),
-            make_stat_card("Avg Bill Value", rupees(totals["avg_bill"]), ""),
-            make_stat_card(
-                "Mean Daily Sales",
-                rupees(mean_daily),
-                f"over {len(revenues)} active day(s)",
-            ),
-            make_stat_card(
-                "Std. Dev. (daily)",
-                rupees(std_daily),
-                "day-to-day variation",
-            ),
+            ('Total Revenue', rupees(totals['revenue']), 'GST included'),
+            ('Total Expenses', rupees(totals['expenses']), 'Expense dates in period'),
+            ('Net Profit', rupees(totals['net_profit']), 'Revenue − recorded expenses'),
+            ('Payments Collected', rupees(totals['payments_collected']), 'Payment dates in period'),
+            ('Outstanding Credit', rupees(totals['outstanding']), 'Selected bills, balance to date'),
+            ('Total Bills', str(totals['bill_count']), 'Bill dates in period'),
+            ('Pieces Sold', str(totals['pieces']), ''),
+            ('Average Bill Value', rupees(totals['avg_bill']), 'Revenue / total bills'),
+            ('Mean Daily Sales', rupees(totals['mean_daily']), f"{totals['active_days']} active day(s)"),
+            ('Median Daily Sales', rupees(totals['median_daily']), 'Middle active-day revenue'),
+            ('Std. Dev. (daily)', rupees(totals['std_daily']), 'Population, active sales days'),
         ]
-
-        # Keep the financial KPIs together at the top, then operational KPIs.
-        columns = 5
-        for index, card in enumerate(cards):
-            self.kpi_grid.addWidget(card, index // columns, index % columns)
+        for index, (title, value, note) in enumerate(cards):
+            self.kpi_grid.addWidget(make_stat_card(title, value, note), index // 3, index % 3)
 
     def _refresh_trend_chart(self, date_from, date_to):
-        daily = self.db.stat_daily_sales(date_from, date_to)
+        daily = self._report['daily']
         self.trend_figure.clear()
         ax = self.trend_figure.add_subplot(111)
         if daily:
-            dates = [d["d"] for d in daily]
+            dates = [d["date"] for d in daily]
             revenues = [d["revenue"] for d in daily]
             mean_val = statistics.mean(revenues)
             std_val = statistics.pstdev(revenues) if len(revenues) > 1 else 0
@@ -233,6 +231,7 @@ class StatsTab(QWidget):
                 ax.axhspan(max(mean_val - std_val, 0), mean_val + std_val,
                            color=COLORS["accent"], alpha=0.12, label=f"\u00b1 1 std dev ({rupees(std_val)})")
             ax.legend(fontsize=8, loc="upper left")
+            ax.set_title(f"Total sales: {rupees(self._report['totals']['revenue'])} · {self._report['totals']['bill_count']} bills")
             ax.set_ylabel("Revenue (Rs.)")
             step = max(1, len(dates) // 10)
             ax.set_xticks(dates[::step])
@@ -245,44 +244,61 @@ class StatsTab(QWidget):
         self.trend_canvas.draw()
 
     def _refresh_category_chart(self, date_from, date_to):
-        rows = self.db.stat_category_sales(date_from, date_to)
+        product = self.chart_group.currentText() == 'Products'
+        rows = self._report['products' if product else 'categories']
+        rows = [r for r in rows if r['revenue'] > 0]
+        names = [(f"{r['name']} ({r['category']})" if product else r['category']) for r in rows]
+        values = [r['revenue'] for r in rows]
+        if len(values) > 8:
+            names, values = names[:8] + ['Other'], values[:8] + [sum(values[8:])]
         self.category_figure.clear()
         ax = self.category_figure.add_subplot(111)
-        if rows:
-            labels = [r["category"] or "Uncategorised" for r in rows]
-            values = [r["revenue"] for r in rows]
-            palette = [COLORS["primary"], COLORS["accent"], "#4a90a4", "#8e6c88", "#c4a35a", "#7a8b69"]
-            colors = [palette[i % len(palette)] for i in range(len(labels))]
-            # Percentage stays on the wedge; category names move to a side
-            # legend instead of wedge labels, which overlap badly when one
-            # category dominates (e.g. a single 100% slice).
-            wedges, _texts, _autotexts = ax.pie(
-                values, autopct="%1.0f%%", colors=colors,
-                textprops={"fontsize": 8, "color": "white", "fontweight": "bold"},
-                pctdistance=0.75,
-            )
-            ax.legend(
-                wedges, labels, loc="center left", bbox_to_anchor=(1.0, 0.5),
-                fontsize=8, frameon=False,
-            )
+        if values:
+            total = sum(values)
+            palette = [COLORS['primary'], COLORS['accent'], '#4a90a4', '#8e6c88', '#c4a35a', '#7a8b69', '#5972a5', '#876e63', '#315b8a']
+            wedges, _, _ = ax.pie(values, autopct=lambda pct: f'{pct:.0f}%' if pct >= 3 else '',
+                                 colors=palette[:len(values)], startangle=90, pctdistance=.78,
+                                 wedgeprops=dict(width=.42, edgecolor='white'),
+                                 textprops=dict(fontsize=9, color='white', fontweight='bold'))
+            labels = [textwrap.fill(f'{name} — {rupees(value)} ({value/total:.1%})', 45)
+                      for name, value in zip(names, values)]
+            ax.legend(wedges, labels, loc='center left', bbox_to_anchor=(1, .5), fontsize=8, frameon=False)
+            ax.set_title('Sales by ' + ('product' if product else 'category'))
         else:
-            ax.text(0.5, 0.5, "No sales in this period", ha="center", va="center", color=COLORS["muted"])
-            ax.set_xticks([])
-            ax.set_yticks([])
+            ax.text(.5, .5, 'No positive sales in this period', ha='center', va='center')
+            ax.set_axis_off()
         self.category_canvas.draw()
 
+    def _refresh_monthly_chart(self):
+        rows = self._report['monthly']
+        self.monthly_figure.clear()
+        ax = self.monthly_figure.add_subplot(111)
+        if rows:
+            bars = ax.bar([r['month'] for r in rows], [r['revenue'] for r in rows], color=COLORS['primary'])
+            step = max(1, (len(rows) + 11) // 12)
+            for index, (bar, row) in enumerate(zip(bars, rows)):
+                if index % step == 0:
+                    ax.annotate(f"{rupees(row['revenue'])}\n{row['bill_count']} bills",
+                                (bar.get_x()+bar.get_width()/2, bar.get_height()),
+                                xytext=(0, 4), textcoords='offset points', ha='center', fontsize=8)
+            ax.set_xticks(range(0, len(rows), step), [r['month'] for r in rows[::step]])
+            ax.tick_params(axis='x', rotation=45, labelsize=8)
+            ax.margins(y=.22)
+            totals = self._report['totals']
+            ax.set_title(f"Total sales: {rupees(totals['revenue'])} · {totals['bill_count']} bills")
+            ax.set_ylabel('Revenue (Rs.)')
+        else:
+            ax.text(.5, .5, 'No sales in this period', ha='center', va='center')
+            ax.set_axis_off()
+        self.monthly_canvas.draw()
+
     def _refresh_top_items(self, date_from, date_to):
-        by = "quantity" if self.top_items_sort_combo.currentText() == "Quantity sold" else "revenue"
-        rows = self.db.stat_top_items(date_from, date_to, limit=10, by=by)
+        key = 'quantity' if self.top_items_sort_combo.currentText() == 'Quantity sold' else 'revenue'
+        rows = sorted(self._report['products'], key=lambda r: r[key], reverse=True)[:10]
         self.top_items_table.setRowCount(len(rows))
         for row_idx, r in enumerate(rows):
-            self.top_items_table.setItem(row_idx, 0, QTableWidgetItem(r["name"]))
-            self.top_items_table.setItem(row_idx, 1, QTableWidgetItem(r["category"] or "-"))
-            self.top_items_table.setItem(row_idx, 2, QTableWidgetItem(str(r["total_qty"])))
-            self.top_items_table.setItem(row_idx, 3, QTableWidgetItem(rupees(r["total_revenue"])))
-            if row_idx == 0:
-                for col in range(4):
-                    self.top_items_table.item(row_idx, col).setBackground(QColor("#fff3cd"))
+            for col, value in enumerate([r['name'], r['category'], str(r['quantity']), rupees(r['revenue'])]):
+                self.top_items_table.setItem(row_idx, col, QTableWidgetItem(value))
 
     def _refresh_top_customers(self, date_from, date_to):
         rows = self.db.stat_top_customers(date_from, date_to, limit=10)
@@ -294,8 +310,25 @@ class StatsTab(QWidget):
 
     def _refresh_wishlist(self):
         rows = self.db.all_open_wishlist()
+        start, end = self.period.bounds()
+        rows = [r for r in rows if (not start or r['date_added'][:10] >= start)
+                and (not end or r['date_added'][:10] <= end)]
         self.wishlist_table.setRowCount(len(rows))
         for row_idx, r in enumerate(rows):
             self.wishlist_table.setItem(row_idx, 0, QTableWidgetItem(r["customer_name"]))
             self.wishlist_table.setItem(row_idx, 1, QTableWidgetItem(r["item_description"]))
             self.wishlist_table.setItem(row_idx, 2, QTableWidgetItem(r["date_added"][:10]))
+
+    def _export_csv(self):
+        if not self.refresh():
+            return
+        start, end = self.period.bounds()
+        rows = [['period', 'from', start or 'All time', '', '', '', ''],
+                ['period', 'to', end or 'All time', '', '', '', '']]
+        rows += [['metric', key, '', '', '', '', value] for key, value in self._report['totals'].items()]
+        for kind, label in [('daily', 'date'), ('monthly', 'month')]:
+            rows += [[kind, r[label], '', r['bill_count'], '', r['revenue'], ''] for r in self._report[kind]]
+        rows += [['product', r['name'], r['category'], '', r['quantity'], r['revenue'], ''] for r in self._report['products']]
+        rows += [['category', r['category'], '', '', r['quantity'], r['revenue'], ''] for r in self._report['categories']]
+        export_csv(self, 'Export Statistics', 'statistics_export.csv',
+                   ['Section', 'Metric / Date / Name', 'Category / Period', 'Bills', 'Pieces', 'Revenue', 'Value'], rows)

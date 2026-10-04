@@ -23,6 +23,7 @@ from datetime import datetime
 from contextlib import contextmanager
 
 from money import money
+from reporting import ReportingQueries
 
 DB_FILENAME = "cloth_shop.db"
 
@@ -137,7 +138,7 @@ STARTER_SUBTYPES = {
 DEFAULT_GST_RATE = 5.0
 
 
-class Database:
+class Database(ReportingQueries):
     def __init__(self, path: str = None):
         self.path = path or _default_db_path()
         self._init_schema()
@@ -1733,19 +1734,8 @@ class Database:
         with self._conn() as conn:
             return conn.execute(q, params).fetchall()
 
-    def stat_monthly_sales(self):
-        """Returns list of (month 'YYYY-MM', revenue, bill_count) for every
-        month that had at least one sale, oldest first. Used for the
-        Monthly Sales chart, which always shows the shop's full history
-        regardless of the Statistics page's Period filter."""
-        with self._conn() as conn:
-            return conn.execute(
-                """SELECT strftime('%Y-%m', bill_date) AS month,
-                          SUM(total) AS revenue, COUNT(*) AS bill_count
-                   FROM bills
-                   GROUP BY month
-                   ORDER BY month"""
-            ).fetchall()
+    def stat_monthly_sales(self, date_from=None, date_to=None):
+        return self.report_statistics(date_from, date_to)['monthly']
 
     def stat_top_items(self, date_from=None, date_to=None, limit=10, by="quantity"):
         # Prefer the item's *current* name/category (via item_id) so that

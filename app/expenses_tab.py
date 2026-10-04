@@ -32,6 +32,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QDate
 
 from widgets import rupees, make_heading, confirm_delete_password
+from period_filter import PeriodFilter
+from report_export import export_csv
+from money import sum_money
 
 
 class ExpensesTab(QWidget):
@@ -121,22 +124,12 @@ class ExpensesTab(QWidget):
         outer.addWidget(add_box)
 
         # ---------------- Filters ----------------
+        self.period = PeriodFilter()
+        self.period.changed.connect(self.refresh)
+        outer.addWidget(self.period)
+        self.date_from, self.date_to = self.period.date_from, self.period.date_to
         filter_box = QGroupBox("Expense History")
         filter_row = QHBoxLayout(filter_box)
-
-        filter_row.addWidget(QLabel("From:"))
-        self.date_from = QDateEdit(calendarPopup=True)
-        self.date_from.setDate(QDate.currentDate().addMonths(-1))
-        self.date_from.setMaximumDate(QDate.currentDate())
-        self.date_from.setDisplayFormat("dd/MM/yyyy")
-        filter_row.addWidget(self.date_from)
-
-        filter_row.addWidget(QLabel("To:"))
-        self.date_to = QDateEdit(calendarPopup=True)
-        self.date_to.setDate(QDate.currentDate())
-        self.date_to.setMaximumDate(QDate.currentDate())
-        self.date_to.setDisplayFormat("dd/MM/yyyy")
-        filter_row.addWidget(self.date_to)
 
         self.category_filter = QComboBox()
         self.category_filter.addItem("All categories")
@@ -153,6 +146,9 @@ class ExpensesTab(QWidget):
         refresh_btn.clicked.connect(self.refresh)
         filter_row.addWidget(refresh_btn)
 
+        export_btn = QPushButton("Export CSV")
+        export_btn.clicked.connect(self._export_csv)
+        filter_row.addWidget(export_btn)
         outer.addWidget(filter_box)
 
         # ---------------- Summary ----------------
@@ -251,13 +247,13 @@ class ExpensesTab(QWidget):
 
         self._refresh_category_filter()
 
-        start_date = self.date_from.date().toString("yyyy-MM-dd")
-        end_date = self.date_to.date().toString("yyyy-MM-dd")
-
-        if start_date > end_date:
-            self.summary_label.setText("Invalid date range.")
+        try:
+            start_date, end_date = self.period.bounds()
+        except ValueError as exc:
+            self.summary_label.setText(str(exc))
             self.expense_table.setRowCount(0)
-            return
+            self._expenses_cache = []
+            return False
 
         category = self.category_filter.currentText()
 
@@ -269,7 +265,8 @@ class ExpensesTab(QWidget):
         if category and category != "All categories":
             rows = [r for r in rows if r["category"] == category]
 
-        total = sum(float(r["amount"] or 0) for r in rows)
+        self._expenses_cache = rows
+        total = sum_money(r["amount"] or 0 for r in rows)
 
         self.summary_label.setText(
             f"Total expenses: {rupees(total)}   •   {len(rows)} expense(s)"
@@ -308,6 +305,8 @@ class ExpensesTab(QWidget):
             )
             self.expense_table.setCellWidget(row_idx, 6, delete_btn)
 
+        return True
+
     def _delete_expense(self, expense_id):
         if not confirm_delete_password(self, "delete this expense"):
             return
@@ -319,3 +318,11 @@ class ExpensesTab(QWidget):
             return
 
         self.refresh()
+
+    def _export_csv(self):
+        if not self.refresh():
+            return
+        export_csv(self, "Export Expenses", "expenses_export.csv",
+                   ["Date", "Category", "Amount", "Payment", "Description", "Added"],
+                   [[r["expense_date"], r["category"], r["amount"], r["payment_mode"],
+                     r["description"], r["created_at"]] for r in self._expenses_cache])

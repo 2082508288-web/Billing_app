@@ -60,3 +60,14 @@ fixed catalog pricing, GST, full payments, admin discounts/credit, restricted
 management commands, stale callbacks after logout and receipt access. Existing
 administrator regression tests now authenticate explicitly. The setup smoke also
 opens both dashboards and checks that logout returns to employee mode.
+
+## Reporting checks
+
+`test_reporting.py` uses dated synthetic bills/payments/expenses to verify:
+month boundaries and leap years, custom and all-time filters, timestamped bills,
+late collections on older bills, outstanding balances, revenue allocation and
+rounding, mean/median/population deviation, CSV contents and error paths, receipt
+navigation, empty/zero-sales charts and the Balances payment button layout.
+Run it for either copy through the existing `BILLING_APP_DIR` selector. No customer
+production data is used. Reporting screens are also rendered offscreen for visual
+inspection; this complements rather than replaces native Windows validation.

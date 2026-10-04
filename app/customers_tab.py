@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from PySide6.QtCore import Qt
+from receipt import ReceiptDialog
 
 from widgets import (
     rupees,
@@ -255,6 +256,9 @@ class CustomersTab(QWidget):
         )
 
         self.history_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.history_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.history_table.cellClicked.connect(self._open_history_receipt)
+        self.history_table.setToolTip("Click a bill row to view or print its receipt.")
 
         history_v.addWidget(self.history_table)
 
@@ -418,6 +422,7 @@ class CustomersTab(QWidget):
 
         history = self.db.get_customer_purchase_history(cid)
 
+        self._history_bill_ids = [b["id"] for b in history]
         self.history_table.setRowCount(len(history))
 
         for row_idx, b in enumerate(history):
@@ -576,6 +581,7 @@ class CustomersTab(QWidget):
         self.summary_label.clear()
 
         # Clear old history
+        self._history_bill_ids = []
         self.history_table.setRowCount(0)
 
         # Clear old wishlist
@@ -787,6 +793,7 @@ class CustomersTab(QWidget):
 
         self.summary_label.clear()
 
+        self._history_bill_ids = []
         self.history_table.setRowCount(0)
 
         self.wishlist_table.setRowCount(0)
@@ -794,3 +801,12 @@ class CustomersTab(QWidget):
         self.save_customer_btn.setText("Save Changes")
 
         self._refresh_customer_list()
+
+    def _open_history_receipt(self, row, column):
+        if column == 4:
+            return
+        ids = getattr(self, '_history_bill_ids', [])
+        if 0 <= row < len(ids):
+            bill, items = self.db.get_bill(ids[row])
+            if bill:
+                ReceiptDialog(bill, items, self).exec()
