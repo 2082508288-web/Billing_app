@@ -13,10 +13,17 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QInputDialog,
+    QLineEdit,
+    QMessageBox,
 )
 from PySide6.QtGui import QIcon
 
 from database import Database
+from access import AccessSession, RoleDatabase
 from theme import STYLESHEET
 from billing_tab import BillingTab
 from inventory_tab import InventoryTab
@@ -45,7 +52,8 @@ class MainWindow(QMainWindow):
         if os.path.exists(APP_ICON_PATH):
             self.setWindowIcon(QIcon(APP_ICON_PATH))
 
-        self.db = Database()
+        self.session = AccessSession()
+        self.db = RoleDatabase(Database(), self.session)
 
         central = QWidget()
         central.setObjectName("centralWidget")
@@ -53,35 +61,94 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         self.setCentralWidget(central)
 
+        access_bar = QHBoxLayout()
+        access_bar.setContentsMargins(16, 10, 16, 10)
+        self.role_label = QLabel()
+        access_bar.addWidget(self.role_label)
+        access_bar.addStretch()
+        self.admin_button = QPushButton("Admin login")
+        self.admin_button.clicked.connect(self._login_admin)
+        access_bar.addWidget(self.admin_button)
+        self.logout_button = QPushButton("Lock admin / Employee mode")
+        self.logout_button.clicked.connect(self._logout_admin)
+        access_bar.addWidget(self.logout_button)
+        layout.addLayout(access_bar)
+
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
 
-        self.customers_tab = CustomersTab(self.db)
-        self.balances_tab = BalancesTab(self.db)
-        self.expenses_tab = ExpensesTab(self.db)
-        self.sales_tab = SalesTab(self.db)
-        self.stats_tab = StatsTab(self.db)
-        self.inventory_tab = InventoryTab(
-            self.db, on_catalog_changed=self._on_catalog_changed
-        )
-        self.billing_tab = BillingTab(
-            self.db, on_bill_saved=self._on_bill_saved
-        )
-
-        self.tabs.addTab(self.billing_tab, "New Bill")
-        self.tabs.addTab(self.inventory_tab, "Inventory")
-        self.tabs.addTab(self.customers_tab, "Customers")
-        self.tabs.addTab(self.balances_tab, "Balances")
-        self.tabs.addTab(self.expenses_tab, "Expenses")
-        self.tabs.addTab(self.sales_tab, "Sales History")
-        self.tabs.addTab(self.stats_tab, "Statistics")
-
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        self._build_dashboard()
+
+    def _build_dashboard(self):
+        self.tabs.blockSignals(True)
+        while self.tabs.count():
+            widget = self.tabs.widget(0)
+            self.tabs.removeTab(0)
+            widget.hide()
+            widget.deleteLater()
+        for name in ("inventory", "customers", "balances", "expenses", "sales", "stats", "status"):
+            setattr(self, name + "_tab", None)
+        self.billing_tab = BillingTab(self.db, on_bill_saved=self._on_bill_saved)
+        self.tabs.addTab(self.billing_tab, "New Bill")
+        if self.session.is_admin:
+            self.customers_tab = CustomersTab(self.db)
+            self.balances_tab = BalancesTab(self.db)
+            self.expenses_tab = ExpensesTab(self.db)
+            self.sales_tab = SalesTab(self.db)
+            self.stats_tab = StatsTab(self.db)
+            self.inventory_tab = InventoryTab(
+                self.db, on_catalog_changed=self._on_catalog_changed
+            )
+            self.tabs.addTab(self.inventory_tab, "Inventory")
+            self.tabs.addTab(self.customers_tab, "Customers")
+            self.tabs.addTab(self.balances_tab, "Balances")
+            self.tabs.addTab(self.expenses_tab, "Expenses")
+            self.tabs.addTab(self.sales_tab, "Sales History")
+            self.tabs.addTab(self.stats_tab, "Statistics")
+
+        self.tabs.setCurrentIndex(0)
+        self.tabs.blockSignals(False)
+        admin = self.session.is_admin
+        self.role_label.setText(
+            "Admin dashboard — full access" if admin else
+            "Employee dashboard — billing only · full payment · GST included in total"
+        )
+        self.admin_button.setVisible(not admin)
+        self.logout_button.setVisible(admin)
+        self.setWindowTitle("Cloth Shop Billing System — " + ("Admin" if admin else "Employee"))
+
+    def _login_admin(self):
+        if self.session.is_admin:
+            return
+        if self.billing_tab.cart:
+            answer = QMessageBox.question(
+                self, "Switch dashboard", "Discard this unfinished bill and switch to admin?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+        password, accepted = QInputDialog.getText(
+            self, "Admin login", "Admin password:", QLineEdit.Password,
+        )
+        if not accepted:
+            return
+        if not self.session.login(password):
+            QMessageBox.warning(self, "Incorrect password", "Admin access was not unlocked.")
+            return
+        self._build_dashboard()
+
+    def _logout_admin(self):
+        # Clear privileged widgets and unfinished discounted/credit bills on lock.
+        self.session.logout()
+        self._build_dashboard()
 
     def _on_catalog_changed(self):
         self.billing_tab.refresh_catalog()
 
     def _on_bill_saved(self):
+        if not self.session.is_admin:
+            return
         self.inventory_tab._refresh_items()
         self.sales_tab.refresh()
         self.stats_tab.refresh()
@@ -89,6 +156,8 @@ class MainWindow(QMainWindow):
         self.balances_tab.refresh()
 
     def _on_tab_changed(self, index):
+        if not self.session.is_admin:
+            return
         widget = self.tabs.widget(index)
 
         if widget is self.sales_tab:

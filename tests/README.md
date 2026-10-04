@@ -51,3 +51,12 @@ python tools/smoke_desktop.py --app-dir Billing_App/app
 
 It uses a temporary database and verifies populated startup, tab navigation,
 QR generation and PDF output without opening the user's shop database.
+
+## Role permissions
+
+`test_access.py` runs with the same `BILLING_APP_DIR` selector and temporary fixtures.
+It checks employee startup, password rejection/cancellation, admin login/logout,
+fixed catalog pricing, GST, full payments, admin discounts/credit, restricted
+management commands, stale callbacks after logout and receipt access. Existing
+administrator regression tests now authenticate explicitly. The setup smoke also
+opens both dashboards and checks that logout returns to employee mode.

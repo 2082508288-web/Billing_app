@@ -1,5 +1,20 @@
 # Cloth Shop Billing
 
+## Employee and admin dashboards
+
+The app opens in **Employee** mode: existing catalog items, fixed prices, quantities,
+customer details, full payment and receipts. GST is automatically included in the
+amount due using the existing calculation: a ₹100 price with 5% GST totals ₹105.
+
+**Admin login** unlocks discounts, partial payments, credit, inventory, customers,
+balances, expenses, sales history, statistics, and the backup/export tools available
+in the recommended copy. **Lock admin / Employee mode** clears the unfinished bill
+and returns to employee access. Restarting always begins in Employee mode.
+
+The admin password configured for this release also authorizes deletion confirmations.
+The local application access gate does not replace Windows account/file permissions
+for protecting the SQLite database or preventing edits to the program itself.
+
 ## Windows: install and build
 
 1. Install **standard 64-bit Python 3.13** from [python.org](https://www.python.org/downloads/windows/), including the Python launcher. Supported: Windows 10/11 x64, CPython 3.10–3.14. Free-threaded Python, 32-bit Python and ARM64 Python are not supported by this build path.

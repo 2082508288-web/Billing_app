@@ -32,14 +32,16 @@ from PySide6.QtCore import Qt, QDate
 from widgets import rupees, EditableSearchCombo, divider, make_heading
 from receipt import ReceiptDialog
 from money import money, line_amount, tax_amount, sum_money
+from access import AccessSession, RoleDatabase
 
 NO_SUBTYPE = -1  # sentinel stored as itemData for "no brand/style selected"
 
 
 class BillingTab(QWidget):
-    def __init__(self, db, on_bill_saved=None):
+    def __init__(self, db, on_bill_saved=None, session=None):
         super().__init__()
-        self.db = db
+        self.session = db.session if isinstance(db, RoleDatabase) else (session or AccessSession())
+        self.db = db if isinstance(db, RoleDatabase) else RoleDatabase(db, self.session)
         self.on_bill_saved = on_bill_saved  # callback so other tabs can refresh
 
         self.cart = []  # list of dicts: item_id, name, category, qty, rate, amount, discount
@@ -52,8 +54,22 @@ class BillingTab(QWidget):
         self._last_total = 0.0
 
         self._build_ui()
+        self._apply_permissions()
         self._refresh_categories()
         self._refresh_phone_completer()
+
+    def _apply_permissions(self):
+        admin = self.session.is_admin
+        self.discount_arrow_btn.setVisible(admin)
+        self.payment_amount_input.setEnabled(admin)
+        self.rate_input.setReadOnly(not admin)
+        self.bill_date_input.setEnabled(admin)
+        self.wishlist_input.setVisible(admin)
+        for field in (self.size_input, self.color_input, self.new_barcode_input):
+            field.setReadOnly(not admin)
+        if not admin:
+            self.payment_amount_input.setToolTip("Full payment is required for employee bills.")
+            self.rate_input.setToolTip("Catalog price. Price changes require an admin.")
 
     # ------------------------------------------------------------- UI setup
     def _build_ui(self):
@@ -291,7 +307,7 @@ class BillingTab(QWidget):
         self.taxable_label = QLabel("Taxable amount: Rs. 0.00")
         v.addWidget(self.taxable_label)
 
-        self.gst_label = QLabel("GST (5%): Rs. 0.00")
+        self.gst_label = QLabel("GST (included in total): Rs. 0.00")
         v.addWidget(self.gst_label)
 
         v.addWidget(divider())
@@ -367,6 +383,8 @@ class BillingTab(QWidget):
         self._on_category_changed()
 
     def _refresh_phone_completer(self):
+        if not self.session.is_admin:
+            return
         phones = [c["phone"] for c in self.db.search_customers("") if c["phone"]]
         completer = QCompleter(phones, self)
         completer.setCaseSensitivity(Qt.CaseInsensitive)
@@ -398,6 +416,10 @@ class BillingTab(QWidget):
             self.customer_name_input.setText(customer["name"])
             self.customer_address_input.setText(customer["address"] or "")
 
+            if not self.session.is_admin:
+                self.customer_info_label.setText("Returning customer")
+                self.customer_info_label.setVisible(True)
+                return
             total_spent, visit_count = self.db.get_customer_total_spent(customer["id"])
             wishlist = self.db.get_wishlist(customer["id"])
             info_lines = [
@@ -513,7 +535,10 @@ class BillingTab(QWidget):
         label = self.item_name_combo.currentText().strip()
         selected = self.current_items_by_name.get(label.lower())
         name = selected["name"] if selected else label
-        rate = self.rate_input.value()
+        if not self.session.is_admin and selected is None:
+            QMessageBox.warning(self, "Admin required", "Choose an existing catalog item. Only admins can add items.")
+            return
+        rate = selected["rate"] if not self.session.is_admin else self.rate_input.value()
         qty = self.qty_input.value()
 
         if cat_id is None:
@@ -553,6 +578,8 @@ class BillingTab(QWidget):
                 # explicitly in Inventory, never by overwriting another variant.
                 item_id = existing["id"]
             else:
+                if not self.session.is_admin:
+                    raise PermissionError("Choose an existing catalog item without changing its details.")
                 item_id = self.db.add_item(
                     name, cat_id, subtype_id, self.new_barcode_input.text(),
                     self.size_input.text().strip(), self.color_input.text().strip(), rate, 0,
@@ -583,6 +610,8 @@ class BillingTab(QWidget):
 
     # ------------------------------------------------------------ the cart
     def _add_to_cart(self, item_id, name, category, qty, rate, gst_rate=5.0):
+        if not self.session.is_admin:
+            rate = money(rate)
         for row in self.cart:
             if (row["item_id"] == item_id and item_id is not None
                     and row["rate"] == money(rate)
@@ -624,6 +653,8 @@ class BillingTab(QWidget):
             self.cart_table.setItem(row_idx, 2, qty_item)
 
             rate_item = QTableWidgetItem(f"{row['rate']:.2f}")
+            if not self.session.is_admin:
+                rate_item.setFlags(rate_item.flags() & ~Qt.ItemIsEditable)
             self.cart_table.setItem(row_idx, 3, rate_item)
 
             amt_item = QTableWidgetItem(rupees(row["amount"]))
@@ -631,6 +662,8 @@ class BillingTab(QWidget):
             self.cart_table.setItem(row_idx, 4, amt_item)
 
             disc_item = QTableWidgetItem(f"{row['discount']:.2f}")
+            if not self.session.is_admin:
+                disc_item.setFlags(disc_item.flags() & ~Qt.ItemIsEditable)
             self.cart_table.setItem(row_idx, 5, disc_item)
         self.cart_table.setColumnHidden(5, not self.discount_visible)
         self.cart_table.blockSignals(False)
@@ -670,6 +703,9 @@ class BillingTab(QWidget):
         col = table_item.column()
         if row_idx >= len(self.cart):
             return
+        if not self.session.is_admin and col in (3, 5):
+            self._render_cart()
+            return
         try:
             if col == 2:  # qty
                 new_qty = max(1, int(float(table_item.text())))
@@ -698,6 +734,8 @@ class BillingTab(QWidget):
 
     # --------------------------------------------------------------- totals
     def _toggle_discount_visibility(self):
+        if not self.session.is_admin:
+            return
         self.discount_visible = not self.discount_visible
         self.discount_arrow_btn.setText(
             "\u25be Discount" if self.discount_visible else "\u25b8 Discount"
@@ -736,19 +774,18 @@ class BillingTab(QWidget):
         gst = self._gst_amount()
         total = self._grand_total()
 
-        self.subtotal_label.setText(f"Subtotal (before discount): {rupees(subtotal)}")
+        self.subtotal_label.setText(f"Subtotal: {rupees(subtotal)}")
         self.discount_total_label.setText(
             f"Total discount given: -{rupees(discount_total)}"
         )
         self.taxable_label.setText(f"Taxable amount: {rupees(taxable)}")
 
-        # All current clothing items use 5% GST. Keep the display simple.
-        self.gst_label.setText(f"GST (5%): {rupees(gst)}")
+        self.gst_label.setText(f"GST (included in total): {rupees(gst)}")
         self.total_label.setText(f"Total to Pay: {rupees(total)}")
 
         old_total = self._last_total
         current_paid = self.payment_amount_input.value()
-        if not self._payment_user_edited or abs(current_paid - old_total) < 0.01:
+        if not self.session.is_admin or not self._payment_user_edited or abs(current_paid - old_total) < 0.01:
             new_paid = total
         else:
             new_paid = min(current_paid, total)
@@ -768,6 +805,15 @@ class BillingTab(QWidget):
             )
             return
 
+        try:
+            self.db.validate_employee_cart(
+                self.cart, self.payment_amount_input.value(),
+                self.bill_date_input.date().toString("yyyy-MM-dd"),
+            )
+        except (PermissionError, ValueError) as exc:
+            QMessageBox.warning(self, "Admin required", str(exc))
+            return
+
         phone = self.phone_input.text().strip()
         name = self.customer_name_input.text().strip()
         address = self.customer_address_input.text().strip()
@@ -785,9 +831,10 @@ class BillingTab(QWidget):
             existing = self.db.get_customer_by_phone(phone) if phone else None
             if existing:
                 customer_id = existing["id"]
-                self.db.update_customer(
-                    customer_id, name, phone, address, existing["notes"] or ""
-                )
+                if self.session.is_admin:
+                    self.db.update_customer(
+                        customer_id, name, phone, address, existing["notes"] or ""
+                    )
             else:
                 customer_id = self.db.add_customer(name, phone, address, "")
 
@@ -858,7 +905,7 @@ class BillingTab(QWidget):
             ("reset the bill form", self._clear_bill),
             ("clear customer details", self._clear_customer),
         ]
-        if wishlist_note and customer_id:
+        if self.session.is_admin and wishlist_note and customer_id:
             actions.append(("save the customer request", lambda: self.db.add_wishlist(customer_id, wishlist_note)))
         if self.on_bill_saved:
             actions.append(("refresh the screens", self.on_bill_saved))
@@ -878,7 +925,7 @@ class BillingTab(QWidget):
         if failures:
             QMessageBox.warning(
                 self, "Bill saved",
-                f"Bill {bill_no} was saved. Open it from Sales History to view or reprint it.\n\n"
+                f"Bill {bill_no} was saved. Ask an admin to open Sales History to view or reprint it.\n\n"
                 + "\n".join(failures),
             )
 

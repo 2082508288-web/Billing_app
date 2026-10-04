@@ -32,7 +32,15 @@ def main():
         db.add_expense('Setup check', 1)
         desktop.Database = lambda: db
         window = desktop.MainWindow()
+        if window.tabs.count() != 1 or window.session.is_admin:
+            raise RuntimeError('Desktop must start with employee billing access only.')
         window.show()
+        # Exercise admin widgets too; this smoke uses only the synthetic database.
+        from unittest.mock import patch
+        with patch.object(desktop.QInputDialog, 'getText', return_value=('1852j', True)):
+            window._login_admin()
+        if not window.session.is_admin:
+            raise RuntimeError('Admin login failed.')
         for index in range(window.tabs.count()):
             window.tabs.setCurrentIndex(index)
             app.processEvents()
@@ -51,6 +59,9 @@ def main():
         dialog.text_edit.document().print_(printer)
         if not pdf.read_bytes().startswith(b'%PDF-'):
             raise RuntimeError('Receipt PDF output failed.')
+        window._logout_admin()
+        if window.tabs.count() != 1 or window.session.is_admin:
+            raise RuntimeError('Admin logout did not restore employee access.')
         window.close()
         app.processEvents()
     if errors:

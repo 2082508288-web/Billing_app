@@ -24,7 +24,20 @@ The database file is created automatically on first run at:
 
 Back up that one file to back up your entire shop's data.
 
-## 2. What's inside
+## Employee and admin access
+
+The app starts in Employee mode with only **New Bill**. Employees can scan or
+select existing catalog items, change quantities, enter a customer for the sale,
+and print/save the receipt. Catalog prices are fixed; GST is added automatically
+to the amount due. Full payment is required. Discounts, price changes, new catalog
+items, backdating, partial payments, credit and management tabs require admin access.
+
+Use **Admin login** with the configured admin password to unlock every tab.
+**Lock admin / Employee mode** logs out and clears the unfinished bill. Restarting
+the app also starts in Employee mode. Switching into admin asks before discarding
+an employee's unfinished bill. Keep optional customer and item fields blank as before.
+
+## 2. What's inside (admin dashboard)
 
 | Tab | Purpose |
 |---|---|
@@ -74,11 +87,11 @@ glancing at the screen doesn't see it by default.
 
 Both **Sales History** and **Customers** have a **Remove** button (per bill,
 and for a whole customer). Removing anything asks for a confirmation and
-then a password — **1852** — so it can't happen by accident or by someone
+then the admin password — so it can't happen by accident or by someone
 just clicking around. Removing a bill also puts its stock quantities back.
 Removing a customer keeps their past bills in your sales records (as
-walk-in sales) but deletes their profile and wishlist. To change the
-password, edit `DELETE_PASSWORD` near the top of `widgets.py`.
+walk-in sales) but deletes their profile and wishlist. Login and deletion
+confirmations use the same password verifier in `access.py`.
 
 ## 7. Customizing the receipt
 
