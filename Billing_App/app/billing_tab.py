@@ -6,6 +6,8 @@ The "New Bill" screen: customer lookup, barcode scan OR manual item entry
 and a discount panel that stays hidden until the cashier explicitly opens it.
 """
 
+from decimal import Decimal, InvalidOperation
+
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -721,29 +723,28 @@ class BillingTab(QWidget):
         if not self.session.is_admin and col in (3, 5):
             self._render_cart()
             return
+        # Validate into a draft; a failed edit must not partly change the cart.
+        updated = dict(self.cart[row_idx])
         try:
-            if col == 2:  # qty
-                new_qty = max(1, int(float(table_item.text())))
-                self.cart[row_idx]["qty"] = new_qty
-                self.cart[row_idx]["amount"] = (
-                    line_amount(self.cart[row_idx]["qty"], self.cart[row_idx]["rate"])
-                )
-            elif col == 3:  # rate
-                new_rate = max(0.0, money(table_item.text()))
-                self.cart[row_idx]["rate"] = new_rate
-                self.cart[row_idx]["amount"] = (
-                    line_amount(self.cart[row_idx]["qty"], self.cart[row_idx]["rate"])
-                )
-            elif col == 5:  # discount
-                new_discount = max(0.0, money(table_item.text()))
-                self.cart[row_idx]["discount"] = min(
-                    new_discount, self.cart[row_idx]["amount"]
-                )
-        except ValueError:
-            pass
-        self.cart[row_idx]["discount"] = min(
-            self.cart[row_idx]["discount"], self.cart[row_idx]["amount"]
-        )
+            if col == 2:
+                quantity = Decimal(table_item.text())
+                if not quantity.is_finite() or quantity != quantity.to_integral_value() or not 1 <= quantity <= 999999:
+                    raise ValueError('Enter a whole quantity from 1 to 999999.')
+                updated['qty'] = int(quantity)
+                updated['amount'] = line_amount(updated['qty'],updated['rate'])
+            elif col == 3:
+                rate = money(table_item.text())
+                if not 0 <= rate <= self.rate_input.maximum():
+                    raise ValueError(f'Enter a price from 0 to {self.rate_input.maximum():g}.')
+                updated['rate'] = rate
+                updated['amount'] = line_amount(updated['qty'],rate)
+            elif col == 5:
+                updated['discount'] = max(0,money(table_item.text()))
+            updated['discount'] = min(updated['discount'],updated['amount'])
+        except (ValueError,InvalidOperation,OverflowError):
+            QMessageBox.warning(self,'Invalid bill entry','Enter a valid whole quantity (1–999999) or a price within the allowed range. The previous value was kept.')
+        else:
+            self.cart[row_idx].update(updated)
         self._render_cart()
         self._recalculate_totals()
 

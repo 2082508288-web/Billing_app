@@ -220,7 +220,7 @@ class RegressionTests(unittest.TestCase):
                 if sql == 'BEGIN IMMEDIATE' and local.role == 1:
                     second_attempted.set()
                 cursor = self.conn.execute(sql, *args)
-                return Cursor(cursor) if 'SUM(amount)' in sql and local.role == 0 else cursor
+                return Cursor(cursor) if 'FROM payments' in sql and 'AS paid' in sql and local.role == 0 else cursor
         @contextmanager
         def instrumented():
             with original() as conn:

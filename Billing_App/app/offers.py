@@ -235,7 +235,9 @@ class OfferQueries:
             if not saving:
                 continue
             for i,discount in zip(indexes,allocate_cents(saving,weights)):
-                if discount:
+                # A participating line can round to zero saving. Keep its
+                # bundle identity so GST is still rounded with the whole group.
+                if chosen[i]:
                     result[i] = dict(offer_id=rule_id,offer_name=rule['name'],offer_discount=discount/100)
         return result
 

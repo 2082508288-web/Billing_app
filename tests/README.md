@@ -111,3 +111,13 @@ plans, admin-only access and stale callbacks, and the employee/attendance/expens
 GUI flows. The existing expense deletion regression targets the action column
 after the added Employee column. Run the suite against both app copies with the
 commands above; all data is synthetic.
+
+## Final audit regressions
+
+`test_final_audit.py` covers fractional historical payment totals across receipts,
+collection limits and reports; per-bill customer balances; invalid cart edits;
+GST for bundle participants with zero allocated discount cents; distinct backup
+files created in the same second; and whole-database CSV consistency during a
+concurrent sale. Backup and whole-database export cases run only for the
+recommended copy that provides those features. The concurrency payment test
+instruments the payment read without depending on a specific aggregate name.

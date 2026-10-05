@@ -232,7 +232,7 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries, EmployeeQueries)
 
             paid_row = conn.execute(
                 """
-                SELECT COALESCE(SUM(amount), 0) AS paid
+                SELECT COALESCE(sum_money_cents(amount), 0)/100.0 AS paid
                 FROM payments
                 WHERE bill_id=?
                 """,
@@ -275,7 +275,7 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries, EmployeeQueries)
         with self._conn() as conn:
             row = conn.execute(
                 """
-                SELECT COALESCE(SUM(amount), 0) AS paid
+                SELECT COALESCE(sum_money_cents(amount), 0)/100.0 AS paid
                 FROM payments
                 WHERE bill_id=?
                 """,
@@ -290,7 +290,7 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries, EmployeeQueries)
                 """
                 SELECT
                     b.total,
-                    COALESCE(SUM(p.amount), 0) AS paid
+                    COALESCE(sum_money_cents(p.amount), 0)/100.0 AS paid
                 FROM bills b
                 LEFT JOIN payments p ON p.bill_id = b.id
                 WHERE b.id=?
@@ -318,32 +318,14 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries, EmployeeQueries)
 
     def get_customer_balance(self, customer_id):
         with self._conn() as conn:
-            row = conn.execute(
-                """
-                SELECT
-                    COALESCE(SUM(ROUND(b.total, 2)), 0) AS total_billed,
-                    COALESCE(
-                        (
-                            SELECT SUM(ROUND(p.amount, 2))
-                            FROM payments p
-                            WHERE p.customer_id=?
-                        ),
-                        0
-                    ) AS total_paid
-                FROM bills b
-                WHERE b.customer_id=?
-                """,
-                (customer_id, customer_id),
-            ).fetchone()
-
-            total_billed = money(row["total_billed"])
-            total_paid = money(row["total_paid"])
-
-            return {
-                "total_billed": total_billed,
-                "total_paid": total_paid,
-                "balance": max(money(total_billed - total_paid), 0),
-            }
+            row = conn.execute("""SELECT
+                COALESCE(SUM(money_cents(b.total)),0)/100.0 AS total_billed,
+                COALESCE(SUM((SELECT COALESCE(sum_money_cents(p.amount),0)
+                    FROM payments p WHERE p.bill_id=b.id)),0)/100.0 AS total_paid,
+                COALESCE(SUM(MAX(money_cents(b.total)-(SELECT COALESCE(sum_money_cents(p.amount),0)
+                    FROM payments p WHERE p.bill_id=b.id),0)),0)/100.0 AS balance
+                FROM bills b WHERE b.customer_id=?""",(customer_id,)).fetchone()
+            return dict(row)
 
     def get_customer_payment_history(self, customer_id):
         with self._conn() as conn:
@@ -363,42 +345,15 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries, EmployeeQueries)
 
     def get_customer_balances(self):
         with self._conn() as conn:
-            rows = conn.execute(
-                """
-                SELECT
-                    c.id,
-                    c.name,
-                    c.phone,
-
-                    COALESCE(SUM(ROUND(b.total, 2)), 0) AS total_billed,
-
-                    COALESCE(
-                        (
-                            SELECT SUM(ROUND(p.amount, 2))
-                            FROM payments p
-                            WHERE p.customer_id = c.id
-                        ),
-                        0
-                    ) AS total_paid
-
-                FROM customers c
-                LEFT JOIN bills b
-                    ON b.customer_id = c.id
-
-                GROUP BY c.id
-                ORDER BY c.name
-                """
-            ).fetchall()
-
-            result = []
-            for row in rows:
-                data = dict(row)
-                data["total_billed"] = money(data["total_billed"])
-                data["total_paid"] = money(data["total_paid"])
-                data["balance"] = max(money(data["total_billed"] - data["total_paid"]), 0)
-                result.append(data)
-
-            return result
+            rows = conn.execute("""SELECT c.id,c.name,c.phone,
+                COALESCE(SUM(money_cents(b.total)),0)/100.0 AS total_billed,
+                COALESCE(SUM((SELECT COALESCE(sum_money_cents(p.amount),0)
+                    FROM payments p WHERE p.bill_id=b.id)),0)/100.0 AS total_paid,
+                COALESCE(SUM(MAX(money_cents(b.total)-(SELECT COALESCE(sum_money_cents(p.amount),0)
+                    FROM payments p WHERE p.bill_id=b.id),0)),0)/100.0 AS balance
+                FROM customers c LEFT JOIN bills b ON b.customer_id=c.id
+                GROUP BY c.id ORDER BY c.name,c.id""").fetchall()
+            return [dict(row) for row in rows]
 
     def _column_exists(self, conn, table_name, column_name):
         rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
@@ -1489,7 +1444,7 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries, EmployeeQueries)
                 """SELECT bills.*, customers.name AS customer_name, customers.phone AS customer_phone,
                           original.bill_no AS exchange_from_no, e.returned_cents AS exchange_returned_cents,
                           e.replacement_cents AS exchange_replacement_cents,
-                          (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE bill_id=bills.id) AS paid_amount
+                          (SELECT COALESCE(sum_money_cents(amount), 0)/100.0 FROM payments WHERE bill_id=bills.id) AS paid_amount
                    FROM bills LEFT JOIN customers ON customers.id = bills.customer_id
                    LEFT JOIN exchanges e ON e.exchange_bill_id=bills.id
                    LEFT JOIN bills original ON original.id=e.source_bill_id
