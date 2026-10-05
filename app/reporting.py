@@ -138,7 +138,7 @@ class ReportingQueries:
                 params.append(category)
             count,total = conn.execute(f'SELECT COUNT(*),COALESCE(sum_money_cents(amount),0)/100.0 FROM expenses WHERE 1=1 {where}',params).fetchone()
             offset = min(offset,max(0,(count-1)//limit)*limit)
-            rows = conn.execute(f'SELECT * FROM expenses WHERE 1=1 {where} ORDER BY expense_date DESC,id DESC LIMIT ? OFFSET ?',params+[limit,offset]).fetchall()
+            rows = conn.execute(f'SELECT expenses.*,(SELECT name FROM employees WHERE employees.id=expenses.employee_id) AS employee_name FROM expenses WHERE 1=1 {where} ORDER BY expense_date DESC,id DESC LIMIT ? OFFSET ?',params+[limit,offset]).fetchall()
             return dict(count=count,total=total,rows=rows)
 
     def balance_summary(self, start=None, end=None, search=''):
@@ -198,7 +198,7 @@ class ReportingQueries:
             if category:
                 where += ' AND category=?'
                 params.append(category)
-            yield from conn.execute(f'SELECT * FROM expenses WHERE 1=1 {where} ORDER BY expense_date DESC,id DESC',params)
+            yield from conn.execute(f'SELECT expenses.*,(SELECT name FROM employees WHERE employees.id=expenses.employee_id) AS employee_name FROM expenses WHERE 1=1 {where} ORDER BY expense_date DESC,id DESC',params)
 
     def report_statistics(self, date_from=None, date_to=None):
         params = []

@@ -161,7 +161,7 @@ class ExpensesTab(QWidget):
         outer.addWidget(self.summary_label)
 
         # ---------------- Table ----------------
-        self.expense_table = QTableWidget(0, 7)
+        self.expense_table = QTableWidget(0, 8)
         self.expense_table.setHorizontalHeaderLabels(
             [
                 "Date",
@@ -170,6 +170,7 @@ class ExpensesTab(QWidget):
                 "Payment",
                 "Description",
                 "Added",
+                "Employee",
                 "",
             ]
         )
@@ -182,6 +183,7 @@ class ExpensesTab(QWidget):
         header.setSectionResizeMode(4, QHeaderView.Stretch)
         header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
 
         self.expense_table.setEditTriggers(QTableWidget.NoEditTriggers)
         outer.addWidget(self.expense_table, 1)
@@ -304,7 +306,9 @@ class ExpensesTab(QWidget):
             delete_btn.clicked.connect(
                 lambda _, eid=expense_id: self._delete_expense(eid)
             )
-            self.expense_table.setCellWidget(row_idx, 6, delete_btn)
+            self.expense_table.setItem(row_idx, 6, QTableWidgetItem(
+                f"{expense['employee_name']} (#{expense['employee_id']})" if expense['employee_id'] is not None else ""))
+            self.expense_table.setCellWidget(row_idx, 7, delete_btn)
 
         return True
 
@@ -326,6 +330,6 @@ class ExpensesTab(QWidget):
         category = self.category_filter.currentText()
         rows = self.db.export_expense_rows(*self.period.bounds(), None if category == 'All categories' else category)
         export_csv(self, "Export Expenses", "expenses_export.csv",
-                   ["Date", "Category", "Amount", "Payment", "Description", "Added"],
+                   ["Date", "Category", "Amount", "Payment", "Description", "Added", "Employee ID", "Employee"],
                    ([r["expense_date"], r["category"], r["amount"], r["payment_mode"],
-                     r["description"], r["created_at"]] for r in rows))
+                     r["description"], r["created_at"], r["employee_id"], r["employee_name"]] for r in rows))

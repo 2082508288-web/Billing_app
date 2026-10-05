@@ -211,3 +211,31 @@ extra purchases, choose the payment method, and complete the bill.
 - Lookup uses indexed phone/bill matching and 100 bills per page. Employees cannot
   access the exchange screens or commands. Existing optional database fields
   remain optional; exchange history uses additional tables.
+
+## Employee attendance and expenses
+
+Open **Admin → Employees**. Add an employee with their name and optional phone,
+or search by the beginning of their name. Employee IDs and phone numbers help
+separate people with the same name. Choose a month, then select the employee.
+
+- The **Attendance sheet** lists every day in that month. Select a day, choose
+  **Full Day**, **Half Day**, or **Absent**, and click **Save attendance**.
+  **Not marked** clears a mistaken entry. Admins can correct earlier dates;
+  future attendance cannot be marked. Saving a day again updates its existing
+  entry. Employee mode cannot view or change these records.
+- **Days attended** counts dates marked Full Day or Half Day, with separate full
+  and half-day counts. Unmarked dates are not assumed absent; future dates are
+  shown as Upcoming. No salary is calculated automatically from these counts.
+- **Employee expenses** records money paid for Salary, Salary advance, Travel,
+  Food, or another category. The selected month shows that employee's total and
+  history. These are the same expense records used by Expenses and Statistics,
+  so they enter shop totals once. If an advance was already recorded, enter
+  only the remaining amount when paying salary; do not record the full salary
+  again. This is a record of payments, not an automatic payroll/loan system.
+- Export the selected month's attendance or all its employee expense rows to CSV.
+  History is paged at 100 rows, while totals and exports include all matches.
+- Use **Edit / Archive** and clear Active to archive someone. Their history stays
+  available through **Include archived**; restore them before adding/correcting
+  records. Existing employee IDs, roles, optional fields, and attendance remain
+  intact. Older expenses without an employee link remain shop expenses; the app
+  does not guess which employee they belong to.

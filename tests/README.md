@@ -100,3 +100,14 @@ linked receipt/deletion rules, signed reporting and additive schema preservation
 The same tests run against both desktop copies with `BILLING_APP_DIR` above.
 Offscreen screen/PDF rendering and a 100,000-bill synthetic lookup benchmark
 complement the suite; native Windows and physical printing still need Windows.
+
+## Employee attendance checks
+
+`test_employees.py` verifies existing-schema preservation, optional fields,
+name search and duplicate identities, paging, archival/history, one mark per day,
+concurrent corrections, leap months, future dates, full/half-day counts, unmarked
+days, linked expense/report reconciliation, complete CSV exports, indexed query
+plans, admin-only access and stale callbacks, and the employee/attendance/expense
+GUI flows. The existing expense deletion regression targets the action column
+after the added Employee column. Run the suite against both app copies with the
+commands above; all data is synthetic.

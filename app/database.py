@@ -24,6 +24,7 @@ from money import money
 from reporting import ReportingQueries, money_cents, MoneySum
 from offers import OfferQueries
 from exchanges import ExchangeQueries
+from employees import EmployeeQueries
 
 DB_FILENAME = "cloth_shop.db"
 
@@ -129,7 +130,7 @@ STARTER_SUBTYPES = {
 DEFAULT_GST_RATE = 5.0
 
 
-class Database(ReportingQueries, OfferQueries, ExchangeQueries):
+class Database(ReportingQueries, OfferQueries, ExchangeQueries, EmployeeQueries):
     def __init__(self, path: str = None):
         self.path = path or _default_db_path()
         self._init_schema()
@@ -137,6 +138,7 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries):
         self._ensure_report_indexes()
         self._ensure_offer_schema()
         self._ensure_exchange_schema()
+        self._ensure_employee_schema()
 
     @contextmanager
     def _conn(self):
@@ -410,12 +412,14 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries):
         payment_mode="Cash",
         description="",
         expense_date=None,
+        employee_id=None,
     ):
         category = category.strip()
 
         if not category:
             raise ValueError("Expense category is required.")
 
+        amount = money(amount)
         if amount <= 0:
             raise ValueError("Expense amount must be greater than 0.")
 
@@ -428,6 +432,9 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries):
             raise ValueError("Invalid expense date. Expected YYYY-MM-DD.")
 
         with self._conn() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if employee_id is not None:
+                self._require_employee(conn,employee_id,active=True)
             cur = conn.execute(
                 """
                 INSERT INTO expenses(
@@ -436,9 +443,10 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries):
                     amount,
                     payment_mode,
                     description,
-                    created_at
+                    created_at,
+                    employee_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     expense_date,
@@ -447,6 +455,7 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries):
                     payment_mode,
                     description,
                     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    employee_id,
                 ),
             )
 
@@ -550,7 +559,7 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries):
         # --------------------------------------------------------- employees
 
     def add_employee(self, name, phone="", role=""):
-        name = name.strip()
+        name = ' '.join(name.split())
 
         if not name:
             raise ValueError("Employee name is required.")
@@ -558,13 +567,14 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries):
         with self._conn() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO employees(name, phone, role)
-                VALUES (?, ?, ?)
+                INSERT INTO employees(name, phone, role, name_key)
+                VALUES (?, ?, ?, ?)
                 """,
                 (
                     name,
                     phone.strip(),
                     role.strip(),
+                    name.casefold(),
                 ),
             )
 
@@ -586,7 +596,7 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries):
             conn.execute(
                 """
                 UPDATE employees
-                SET name=?, phone=?, role=?, active=?
+                SET name=?, phone=?, role=?, active=?, name_key=?
                 WHERE id=?
                 """,
                 (
@@ -594,6 +604,7 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries):
                     phone.strip(),
                     role.strip(),
                     active,
+                    " ".join(name.split()).casefold(),
                     employee_id,
                 ),
             )
@@ -611,44 +622,8 @@ class Database(ReportingQueries, OfferQueries, ExchangeQueries):
 
     # -------------------------------------------------------- attendance
 
-    def save_attendance(
-        self,
-        employee_id,
-        attendance_date,
-        status,
-        notes="",
-    ):
-        if status not in ("Full Day", "Half Day", "Absent"):
-            raise ValueError("Invalid attendance status.")
-
-        try:
-            datetime.strptime(attendance_date, "%Y-%m-%d")
-        except ValueError:
-            raise ValueError("Invalid attendance date. Expected YYYY-MM-DD.")
-
-        with self._conn() as conn:
-            conn.execute(
-                """
-                INSERT INTO attendance(
-                    employee_id,
-                    attendance_date,
-                    status,
-                    notes
-                )
-                VALUES (?, ?, ?, ?)
-
-                ON CONFLICT(employee_id, attendance_date)
-                DO UPDATE SET
-                    status=excluded.status,
-                    notes=excluded.notes
-                """,
-                (
-                    employee_id,
-                    attendance_date,
-                    status,
-                    notes,
-                ),
-            )
+    def save_attendance(self, employee_id, attendance_date, status, notes=""):
+        self.set_employee_attendance(employee_id,attendance_date,status,notes)
 
     def get_attendance(
         self,

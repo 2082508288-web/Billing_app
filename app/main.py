@@ -33,6 +33,7 @@ from balances_tab import BalancesTab
 from expenses_tab import ExpensesTab
 from offers_tab import OffersTab
 from exchanges_tab import ExchangesTab
+from employees_tab import EmployeesTab
 
 
 def resource_path(relative_path):
@@ -86,7 +87,7 @@ class MainWindow(QMainWindow):
             self.tabs.removeTab(0)
             widget.hide()
             widget.deleteLater()
-        for name in ("inventory", "customers", "balances", "expenses", "sales", "stats", "status", "offers", "exchanges"):
+        for name in ("inventory", "customers", "balances", "expenses", "sales", "stats", "status", "offers", "exchanges", "employees"):
             setattr(self, name + "_tab", None)
         self.billing_tab = BillingTab(self.db, on_bill_saved=self._on_bill_saved)
         self.tabs.addTab(self.billing_tab, "New Bill")
@@ -96,6 +97,7 @@ class MainWindow(QMainWindow):
             self.expenses_tab = ExpensesTab(self.db, autoload=False)
             self.sales_tab = SalesTab(self.db, autoload=False)
             self.stats_tab = StatsTab(self.db, autoload=False)
+            self.employees_tab = EmployeesTab(self.db, autoload=False)
             self.exchanges_tab = ExchangesTab(self.db, autoload=False)
             self.offers_tab = OffersTab(self.db, on_changed=self.billing_tab._refresh_offers, autoload=False)
             self.inventory_tab = InventoryTab(
@@ -109,6 +111,7 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(self.stats_tab, "Statistics")
             self.tabs.addTab(self.offers_tab, "Offers")
             self.tabs.addTab(self.exchanges_tab, "Exchanges")
+            self.tabs.addTab(self.employees_tab, "Employees")
 
         self.tabs.setCurrentIndex(0)
         self.tabs.blockSignals(False)
@@ -167,6 +170,8 @@ class MainWindow(QMainWindow):
             self.balances_tab.refresh()
         elif widget is self.expenses_tab:
             self.expenses_tab.refresh()
+        elif widget is self.employees_tab:
+            self.employees_tab.refresh()
         elif widget is self.exchanges_tab:
             self.exchanges_tab.refresh()
         elif widget is self.offers_tab:

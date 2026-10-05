@@ -112,11 +112,11 @@ class RegressionTests(unittest.TestCase):
         eid = self.db.add_expense('Rent', 10)
         tab = ExpensesTab(self.db)
         with patch('expenses_tab.confirm_delete_password', return_value=False) as confirm:
-            tab.expense_table.cellWidget(0, 6).click()
+            tab.expense_table.cellWidget(0, 7).click()
             confirm.assert_called_once_with(tab, 'delete this expense')
         self.assertEqual(len(self.db.get_expenses()), 1)
         with patch('expenses_tab.confirm_delete_password', return_value=True):
-            tab.expense_table.cellWidget(0, 6).click()
+            tab.expense_table.cellWidget(0, 7).click()
         self.assertEqual(self.db.get_expenses(), [])
 
     def test_receipts_use_actual_payments_on_initial_print_and_reprint(self):
