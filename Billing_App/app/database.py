@@ -19,10 +19,15 @@ import sqlite3
 import os
 import csv
 import shutil
+import tempfile
 from datetime import datetime
 from contextlib import contextmanager
 
 from money import money
+from reporting import ReportingQueries, money_cents, MoneySum
+from offers import OfferQueries
+from exchanges import ExchangeQueries
+from employees import EmployeeQueries
 
 DB_FILENAME = "cloth_shop.db"
 
@@ -137,32 +142,26 @@ STARTER_SUBTYPES = {
 DEFAULT_GST_RATE = 5.0
 
 
-class Database:
+class Database(ReportingQueries, OfferQueries, ExchangeQueries, EmployeeQueries):
     def __init__(self, path: str = None):
         self.path = path or _default_db_path()
         self._init_schema()
         self._run_migrations()
+        self._ensure_report_indexes()
+        self._ensure_offer_schema()
+        self._ensure_exchange_schema()
+        self._ensure_employee_schema()
 
     @contextmanager
     def _conn(self):
         conn = sqlite3.connect(self.path, timeout=10)
         conn.row_factory = sqlite3.Row
+        conn.create_function("money_cents", 1, money_cents, deterministic=True)
+        conn.create_aggregate("sum_money_cents", 1, MoneySum)
 
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
-        # Performance fix: synchronous=FULL forces an fsync on every single
-        # write transaction (every bill, every expense, every stock
-        # update), which is the main reason things can start to feel
-        # laggy as the database grows -- not the row count itself (SQLite
-        # is fine into the millions of rows with the indexes already in
-        # this schema), but the disk-sync cost paid on every write.
-        # synchronous=NORMAL is the combination SQLite's own docs
-        # recommend when journal_mode=WAL: still safe against an
-        # application crash (WAL protects that), and only a power-loss
-        # in the split second of a checkpoint could ever be an issue --
-        # a reasonable trade for a shop till. This does not touch the
-        # schema or any stored data.
-        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA synchronous = FULL")
         conn.execute("PRAGMA busy_timeout = 10000")
 
         try:
@@ -173,6 +172,17 @@ class Database:
             raise
         finally:
             conn.close()
+
+    def _ensure_report_indexes(self):
+        # date(...) indexes preserve existing timestamp/date semantics.
+        with self._conn() as conn:
+            for statement in (
+                "CREATE INDEX IF NOT EXISTS idx_bills_day ON bills(date(bill_date))",
+                "CREATE INDEX IF NOT EXISTS idx_payments_day ON payments(date(payment_date))",
+                "CREATE INDEX IF NOT EXISTS idx_expenses_day ON expenses(date(expense_date))",
+                "CREATE INDEX IF NOT EXISTS idx_bills_customer_date ON bills(customer_id,bill_date DESC,id DESC)",
+            ):
+                conn.execute(statement)
 
     def _init_schema(self):
         with self._conn() as conn:
@@ -234,7 +244,7 @@ class Database:
 
             paid_row = conn.execute(
                 """
-                SELECT COALESCE(SUM(amount), 0) AS paid
+                SELECT COALESCE(sum_money_cents(amount), 0)/100.0 AS paid
                 FROM payments
                 WHERE bill_id=?
                 """,
@@ -277,7 +287,7 @@ class Database:
         with self._conn() as conn:
             row = conn.execute(
                 """
-                SELECT COALESCE(SUM(amount), 0) AS paid
+                SELECT COALESCE(sum_money_cents(amount), 0)/100.0 AS paid
                 FROM payments
                 WHERE bill_id=?
                 """,
@@ -292,7 +302,7 @@ class Database:
                 """
                 SELECT
                     b.total,
-                    COALESCE(SUM(p.amount), 0) AS paid
+                    COALESCE(sum_money_cents(p.amount), 0)/100.0 AS paid
                 FROM bills b
                 LEFT JOIN payments p ON p.bill_id = b.id
                 WHERE b.id=?
@@ -320,32 +330,14 @@ class Database:
 
     def get_customer_balance(self, customer_id):
         with self._conn() as conn:
-            row = conn.execute(
-                """
-                SELECT
-                    COALESCE(SUM(ROUND(b.total, 2)), 0) AS total_billed,
-                    COALESCE(
-                        (
-                            SELECT SUM(ROUND(p.amount, 2))
-                            FROM payments p
-                            WHERE p.customer_id=?
-                        ),
-                        0
-                    ) AS total_paid
-                FROM bills b
-                WHERE b.customer_id=?
-                """,
-                (customer_id, customer_id),
-            ).fetchone()
-
-            total_billed = money(row["total_billed"])
-            total_paid = money(row["total_paid"])
-
-            return {
-                "total_billed": total_billed,
-                "total_paid": total_paid,
-                "balance": max(money(total_billed - total_paid), 0),
-            }
+            row = conn.execute("""SELECT
+                COALESCE(SUM(money_cents(b.total)),0)/100.0 AS total_billed,
+                COALESCE(SUM((SELECT COALESCE(sum_money_cents(p.amount),0)
+                    FROM payments p WHERE p.bill_id=b.id)),0)/100.0 AS total_paid,
+                COALESCE(SUM(MAX(money_cents(b.total)-(SELECT COALESCE(sum_money_cents(p.amount),0)
+                    FROM payments p WHERE p.bill_id=b.id),0)),0)/100.0 AS balance
+                FROM bills b WHERE b.customer_id=?""",(customer_id,)).fetchone()
+            return dict(row)
 
     def get_customer_payment_history(self, customer_id):
         with self._conn() as conn:
@@ -365,42 +357,15 @@ class Database:
 
     def get_customer_balances(self):
         with self._conn() as conn:
-            rows = conn.execute(
-                """
-                SELECT
-                    c.id,
-                    c.name,
-                    c.phone,
-
-                    COALESCE(SUM(ROUND(b.total, 2)), 0) AS total_billed,
-
-                    COALESCE(
-                        (
-                            SELECT SUM(ROUND(p.amount, 2))
-                            FROM payments p
-                            WHERE p.customer_id = c.id
-                        ),
-                        0
-                    ) AS total_paid
-
-                FROM customers c
-                LEFT JOIN bills b
-                    ON b.customer_id = c.id
-
-                GROUP BY c.id
-                ORDER BY c.name
-                """
-            ).fetchall()
-
-            result = []
-            for row in rows:
-                data = dict(row)
-                data["total_billed"] = money(data["total_billed"])
-                data["total_paid"] = money(data["total_paid"])
-                data["balance"] = max(money(data["total_billed"] - data["total_paid"]), 0)
-                result.append(data)
-
-            return result
+            rows = conn.execute("""SELECT c.id,c.name,c.phone,
+                COALESCE(SUM(money_cents(b.total)),0)/100.0 AS total_billed,
+                COALESCE(SUM((SELECT COALESCE(sum_money_cents(p.amount),0)
+                    FROM payments p WHERE p.bill_id=b.id)),0)/100.0 AS total_paid,
+                COALESCE(SUM(MAX(money_cents(b.total)-(SELECT COALESCE(sum_money_cents(p.amount),0)
+                    FROM payments p WHERE p.bill_id=b.id),0)),0)/100.0 AS balance
+                FROM customers c LEFT JOIN bills b ON b.customer_id=c.id
+                GROUP BY c.id ORDER BY c.name,c.id""").fetchall()
+            return [dict(row) for row in rows]
 
     def _column_exists(self, conn, table_name, column_name):
         rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
@@ -414,12 +379,14 @@ class Database:
         payment_mode="Cash",
         description="",
         expense_date=None,
+        employee_id=None,
     ):
         category = category.strip()
 
         if not category:
             raise ValueError("Expense category is required.")
 
+        amount = money(amount)
         if amount <= 0:
             raise ValueError("Expense amount must be greater than 0.")
 
@@ -434,6 +401,9 @@ class Database:
         created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         with self._conn() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if employee_id is not None:
+                self._require_employee(conn,employee_id,active=True)
             cur = conn.execute(
                 """
                 INSERT INTO expenses(
@@ -442,9 +412,10 @@ class Database:
                     amount,
                     payment_mode,
                     description,
-                    created_at
+                    created_at,
+                    employee_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     expense_date,
@@ -453,6 +424,7 @@ class Database:
                     payment_mode,
                     description,
                     created_at,
+                    employee_id,
                 ),
             )
 
@@ -556,7 +528,7 @@ class Database:
         # --------------------------------------------------------- employees
 
     def add_employee(self, name, phone="", role=""):
-        name = name.strip()
+        name = ' '.join(name.split())
 
         if not name:
             raise ValueError("Employee name is required.")
@@ -564,13 +536,14 @@ class Database:
         with self._conn() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO employees(name, phone, role)
-                VALUES (?, ?, ?)
+                INSERT INTO employees(name, phone, role, name_key)
+                VALUES (?, ?, ?, ?)
                 """,
                 (
                     name,
                     phone.strip(),
                     role.strip(),
+                    name.casefold(),
                 ),
             )
 
@@ -592,7 +565,7 @@ class Database:
             conn.execute(
                 """
                 UPDATE employees
-                SET name=?, phone=?, role=?, active=?
+                SET name=?, phone=?, role=?, active=?, name_key=?
                 WHERE id=?
                 """,
                 (
@@ -600,6 +573,7 @@ class Database:
                     phone.strip(),
                     role.strip(),
                     active,
+                    " ".join(name.split()).casefold(),
                     employee_id,
                 ),
             )
@@ -617,44 +591,8 @@ class Database:
 
     # -------------------------------------------------------- attendance
 
-    def save_attendance(
-        self,
-        employee_id,
-        attendance_date,
-        status,
-        notes="",
-    ):
-        if status not in ("Full Day", "Half Day", "Absent"):
-            raise ValueError("Invalid attendance status.")
-
-        try:
-            datetime.strptime(attendance_date, "%Y-%m-%d")
-        except ValueError:
-            raise ValueError("Invalid attendance date. Expected YYYY-MM-DD.")
-
-        with self._conn() as conn:
-            conn.execute(
-                """
-                INSERT INTO attendance(
-                    employee_id,
-                    attendance_date,
-                    status,
-                    notes
-                )
-                VALUES (?, ?, ?, ?)
-
-                ON CONFLICT(employee_id, attendance_date)
-                DO UPDATE SET
-                    status=excluded.status,
-                    notes=excluded.notes
-                """,
-                (
-                    employee_id,
-                    attendance_date,
-                    status,
-                    notes,
-                ),
-            )
+    def save_attendance(self, employee_id, attendance_date, status, notes=""):
+        self.set_employee_attendance(employee_id,attendance_date,status,notes)
 
     def get_attendance(
         self,
@@ -1348,6 +1286,7 @@ class Database:
         gst_amount=0.0,
         initial_payment_amount=None,
         payment_notes="",
+        employee_pricing=False,
     ):
         """
         Save an entire bill as one atomic transaction.
@@ -1409,6 +1348,9 @@ class Database:
 
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
+
+            if employee_pricing or any(i.get('offer_checked') or i.get('offer_id_snapshot') for i in items):
+                self._validate_offer_bill(conn, locals())
 
             bill_no = self._next_bill_no_conn(conn, bill_date)
             conn.execute("""INSERT INTO bill_sequences(date_key, last_seq) VALUES (?, ?)
@@ -1483,9 +1425,12 @@ class Database:
                         subtotal,
                         gst_rate,
                         gst_amount,
-                        stock_deducted
+                        stock_deducted,
+                        offer_id_snapshot,
+                        offer_name_snapshot,
+                        offer_discount
                     )
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         bill_id,
@@ -1498,6 +1443,9 @@ class Database:
                         line_gst_rate,
                         line_gst_amount,
                         stock_deducted,
+                        it.get('offer_id_snapshot'),
+                        it.get('offer_name_snapshot'),
+                        money(it.get('offer_discount', 0)),
                     ),
                 )
 
@@ -1549,8 +1497,12 @@ class Database:
         with self._conn() as conn:
             bill = conn.execute(
                 """SELECT bills.*, customers.name AS customer_name, customers.phone AS customer_phone,
-                          (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE bill_id=bills.id) AS paid_amount
+                          original.bill_no AS exchange_from_no, e.returned_cents AS exchange_returned_cents,
+                          e.replacement_cents AS exchange_replacement_cents,
+                          (SELECT COALESCE(sum_money_cents(amount), 0)/100.0 FROM payments WHERE bill_id=bills.id) AS paid_amount
                    FROM bills LEFT JOIN customers ON customers.id = bills.customer_id
+                   LEFT JOIN exchanges e ON e.exchange_bill_id=bills.id
+                   LEFT JOIN bills original ON original.id=e.source_bill_id
                    WHERE bills.id=?""",
                 (bill_id,),
             ).fetchone()
@@ -1569,6 +1521,9 @@ class Database:
         that were deducted when the bill was made."""
         with self._conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if conn.execute('SELECT 1 FROM exchanges WHERE source_bill_id=? OR exchange_bill_id=? LIMIT 1',
+                            (bill_id,bill_id)).fetchone():
+                raise ValueError('Bills linked to exchanges cannot be deleted; their stock and payment history must remain intact.')
             items = conn.execute(
                 "SELECT item_id, COALESCE(stock_deducted, quantity) AS stock_deducted FROM bill_items WHERE bill_id=?", (bill_id,)
             ).fetchall()
@@ -1733,19 +1688,8 @@ class Database:
         with self._conn() as conn:
             return conn.execute(q, params).fetchall()
 
-    def stat_monthly_sales(self):
-        """Returns list of (month 'YYYY-MM', revenue, bill_count) for every
-        month that had at least one sale, oldest first. Used for the
-        Monthly Sales chart, which always shows the shop's full history
-        regardless of the Statistics page's Period filter."""
-        with self._conn() as conn:
-            return conn.execute(
-                """SELECT strftime('%Y-%m', bill_date) AS month,
-                          SUM(total) AS revenue, COUNT(*) AS bill_count
-                   FROM bills
-                   GROUP BY month
-                   ORDER BY month"""
-            ).fetchall()
+    def stat_monthly_sales(self, date_from=None, date_to=None):
+        return self.report_statistics(date_from, date_to)['monthly']
 
     def stat_top_items(self, date_from=None, date_to=None, limit=10, by="quantity"):
         # Prefer the item's *current* name/category (via item_id) so that
@@ -1833,18 +1777,22 @@ class Database:
         os.makedirs(dest_folder, exist_ok=True)
 
         stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        dest_path = os.path.join(dest_folder, f"cloth_shop_backup_{stamp}.db")
-
-        src_conn = sqlite3.connect(self.path)
+        # Reserve a unique path even for two backups in the same clock tick.
+        fd,dest_path = tempfile.mkstemp(prefix=f"cloth_shop_backup_{stamp}_",suffix=".db",dir=dest_folder)
+        os.close(fd)
         try:
-            dest_conn = sqlite3.connect(dest_path)
+            src_conn = sqlite3.connect(self.path)
             try:
-                src_conn.backup(dest_conn)
+                dest_conn = sqlite3.connect(dest_path)
+                try:
+                    src_conn.backup(dest_conn)
+                finally:
+                    dest_conn.close()
             finally:
-                dest_conn.close()
-        finally:
-            src_conn.close()
-
+                src_conn.close()
+        except Exception:
+            os.unlink(dest_path)
+            raise
         return dest_path
 
     def export_all_tables_csv(self, dest_folder):
@@ -1859,6 +1807,9 @@ class Database:
         written = []
 
         with self._conn() as conn:
+            # All CSVs describe one committed database state, even if billing
+            # continues while files are being written.
+            conn.execute('BEGIN')
             tables = [
                 r["name"]
                 for r in conn.execute(
@@ -1871,26 +1822,15 @@ class Database:
             ]
 
             for table in tables:
-                rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+                identifier = '"'+table.replace('"','""')+'"'
+                cursor = conn.execute(f"SELECT * FROM {identifier}")
                 out_path = os.path.join(dest_folder, f"{table}.csv")
                 with open(out_path, "w", newline="", encoding="utf-8") as f:
                     writer = csv.writer(f)
-                    if rows:
-                        writer.writerow(rows[0].keys())
-                        for row in rows:
-                            writer.writerow(list(row))
-                    else:
-                        # Still write an (empty) file with just headers,
-                        # taken from the table's own column list, so an
-                        # empty table doesn't just silently vanish from
-                        # the export.
-                        cols = [
-                            c["name"]
-                            for c in conn.execute(
-                                f"PRAGMA table_info({table})"
-                            ).fetchall()
-                        ]
-                        writer.writerow(cols)
+                    writer.writerow([column[0] for column in cursor.description])
+                    # Iterate rows instead of loading a whole sales table into RAM.
+                    for row in cursor:
+                        writer.writerow(list(row))
                 written.append(out_path)
 
         return written

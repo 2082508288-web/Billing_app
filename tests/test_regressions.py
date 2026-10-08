@@ -21,6 +21,7 @@ from PySide6.QtCore import QDate
 from PySide6.QtWidgets import QApplication, QMessageBox, QFileDialog, QDialog
 from database import Database, SCHEMA
 from billing_tab import BillingTab
+from access import AccessSession
 from expenses_tab import ExpensesTab
 from balances_tab import ReceivePaymentDialog
 from receipt import ReceiptDialog, _paid_amount, _balance_amount, _make_payment_qr_image
@@ -38,6 +39,8 @@ class RegressionTests(unittest.TestCase):
         self.addCleanup(self.folder.cleanup)
         self.path = Path(self.folder.name)
         self.db = Database(str(self.path / 'shop.db'))
+        self.session = AccessSession()
+        self.session.login("1852j")
         self.slot_errors = []
         old_hook = sys.excepthook
         sys.excepthook = lambda *args: self.slot_errors.append(args[1])
@@ -98,6 +101,8 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(self.db.get_expenses()[0]['created_at'])
         with patch.object(main, 'Database', return_value=self.db):
             window = main.MainWindow()
+            window.session.login("1852j")
+            window._build_dashboard()
         for i in range(window.tabs.count()):
             window.tabs.setCurrentIndex(i)
             self.app.processEvents()
@@ -107,11 +112,11 @@ class RegressionTests(unittest.TestCase):
         eid = self.db.add_expense('Rent', 10)
         tab = ExpensesTab(self.db)
         with patch('expenses_tab.confirm_delete_password', return_value=False) as confirm:
-            tab.expense_table.cellWidget(0, 6).click()
+            tab.expense_table.cellWidget(0, 7).click()
             confirm.assert_called_once_with(tab, 'delete this expense')
         self.assertEqual(len(self.db.get_expenses()), 1)
         with patch('expenses_tab.confirm_delete_password', return_value=True):
-            tab.expense_table.cellWidget(0, 6).click()
+            tab.expense_table.cellWidget(0, 7).click()
         self.assertEqual(self.db.get_expenses(), [])
 
     def test_receipts_use_actual_payments_on_initial_print_and_reprint(self):
@@ -149,7 +154,7 @@ class RegressionTests(unittest.TestCase):
         self.assertFalse(_make_payment_qr_image({'bill_no':'TEST'}, 100).isNull())
 
     def test_partial_payment_and_rounding_agree(self):
-        tab = BillingTab(self.db)
+        tab = BillingTab(self.db, session=self.session)
         tab._add_to_cart(None, 'Small item', 'Shirts', 1, 1.31)
         self.assertEqual(tab._grand_total(), 1.38)
         tab.customer_name_input.setText('Customer')
@@ -184,7 +189,7 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(self.db.get_customer_balances()[0]['balance'], 0)
 
     def test_tax_rounding_matches_lines_and_stored_totals(self):
-        tab = BillingTab(self.db)
+        tab = BillingTab(self.db, session=self.session)
         tab._add_to_cart(None, 'A', 'Shirts', 1, 0.10)
         tab._add_to_cart(None, 'B', 'Shirts', 1, 0.10)
         self.assertEqual(tab._gst_amount(), 0.02)
@@ -215,7 +220,7 @@ class RegressionTests(unittest.TestCase):
                 if sql == 'BEGIN IMMEDIATE' and local.role == 1:
                     second_attempted.set()
                 cursor = self.conn.execute(sql, *args)
-                return Cursor(cursor) if 'SUM(amount)' in sql and local.role == 0 else cursor
+                return Cursor(cursor) if 'FROM payments' in sql and 'AS paid' in sql and local.role == 0 else cursor
         @contextmanager
         def instrumented():
             with original() as conn:
@@ -277,7 +282,7 @@ class RegressionTests(unittest.TestCase):
     def test_variant_creation_does_not_overwrite_original(self):
         iid = self.item(name='Classic', size='M', color='Blue', barcode='M')
         original = dict(self.db.get_item_by_id(iid))
-        tab = BillingTab(self.db)
+        tab = BillingTab(self.db, session=self.session)
         tab.item_name_combo.setEditText('Classic')
         tab.size_input.setText('L')
         tab.color_input.setText('Red')
@@ -294,7 +299,7 @@ class RegressionTests(unittest.TestCase):
 
     def test_matching_variant_uses_sale_rate_without_catalogue_edit(self):
         iid = self.item(name='Classic', size='M', color='Blue', barcode='M')
-        tab = BillingTab(self.db)
+        tab = BillingTab(self.db, session=self.session)
         for price in (100, 200):
             tab.item_name_combo.setEditText('Classic')
             tab.rate_input.setValue(price)
@@ -310,7 +315,7 @@ class RegressionTests(unittest.TestCase):
     def test_explicit_variant_selection_needs_no_barcode(self):
         first = self.item(name='Same')
         second = self.item(name='Same')
-        tab = BillingTab(self.db)
+        tab = BillingTab(self.db, session=self.session)
         label = next(label for label, row in tab.current_items_by_name.items() if row['id'] == second)
         tab.item_name_combo.setEditText(label)
         tab._add_manual_item()
@@ -319,7 +324,7 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(len(self.db.get_items()), 2)
 
     def test_optional_variant_fields_still_allow_manual_entry(self):
-        tab = BillingTab(self.db)
+        tab = BillingTab(self.db, session=self.session)
         tab.item_name_combo.setEditText('No barcode or size')
         tab.rate_input.setValue(10)
         tab._add_manual_item()
@@ -331,7 +336,7 @@ class RegressionTests(unittest.TestCase):
 
     def test_failed_manual_add_is_reported_without_changing_catalogue(self):
         self.item(name='Original', barcode='USED')
-        tab = BillingTab(self.db)
+        tab = BillingTab(self.db, session=self.session)
         tab.item_name_combo.setEditText('Other')
         tab.rate_input.setValue(100)
         tab.new_barcode_input.setText('USED')
@@ -342,7 +347,7 @@ class RegressionTests(unittest.TestCase):
 
     def test_customer_switch_clears_autofilled_identity(self):
         self.db.add_customer('A', '111', 'Address A')
-        tab = BillingTab(self.db)
+        tab = BillingTab(self.db, session=self.session)
         tab.phone_input.setText('111')
         tab._lookup_customer()
         tab.phone_input.setText('222')
@@ -358,7 +363,7 @@ class RegressionTests(unittest.TestCase):
 
     def test_blank_phone_transition_and_new_manual_name(self):
         self.db.add_customer('A', '111', 'Address A')
-        tab = BillingTab(self.db)
+        tab = BillingTab(self.db, session=self.session)
         tab.phone_input.setText('111')
         tab._lookup_customer()
         tab.phone_input.setText('')
@@ -372,7 +377,7 @@ class RegressionTests(unittest.TestCase):
         for failure in ('wishlist', 'receipt', 'refresh'):
             with self.subTest(failure=failure):
                 refresh = unittest.mock.Mock()
-                tab = BillingTab(self.db, refresh)
+                tab = BillingTab(self.db, refresh, session=self.session)
                 tab.customer_name_input.setText('Customer')
                 tab.wishlist_input.setText('Request')
                 tab._add_to_cart(None, 'Test', 'Shirts', 1, 100)
@@ -387,7 +392,7 @@ class RegressionTests(unittest.TestCase):
                 self.assertEqual(len(self.db.search_bills()), before+1)
 
     def test_pre_commit_failure_keeps_cart_for_safe_retry(self):
-        tab = BillingTab(self.db)
+        tab = BillingTab(self.db, session=self.session)
         tab._add_to_cart(None, 'Test', 'Shirts', 1, 100)
         with patch.object(self.db, 'save_bill', side_effect=sqlite3.OperationalError('locked')):
             tab._complete_bill()
@@ -401,6 +406,8 @@ class RegressionTests(unittest.TestCase):
         iid = self.item(10)
         with patch.object(main, 'Database', return_value=self.db):
             window = main.MainWindow()
+            window.session.login("1852j")
+            window._build_dashboard()
         window.billing_tab._add_to_cart(iid, 'Test', 'Shirts', 1, 100)
         with patch('billing_tab.ReceiptDialog'):
             window.billing_tab._complete_bill()
